@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "acuity-reader",
+  "productName": "Acuity Reader",
   "version": "0.1.0",
-  "identifier": "com.marknewman.acuity-reader",
+  "identifier": "com.acuity.reader",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "acuity-reader",
-        "width": 800,
-        "height": 600
+        "title": "Acuity Reader",
+        "width": 1150,
+        "height": 780,
+        "minWidth": 850,
+        "minHeight": 600
       }
     ],
     "security": {
