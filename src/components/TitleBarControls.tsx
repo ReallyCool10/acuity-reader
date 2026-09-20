@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Pin, PinOff, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
+import { Pin, PinOff, FolderOpen, RefreshCw } from 'lucide-react';
+import { AcuityLogo } from './AcuityLogo';
 
 interface TitleBarControlsProps {
   onOpenSettings: () => void;
@@ -34,11 +35,9 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
       className="flex items-center justify-between h-10 px-3 select-none bg-transparent border-b border-white/[0.06] backdrop-blur-md z-30"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Brand logo & title - Windows Media Player style */}
+      {/* Brand logo & title - Elegant lowercase 'a' and refined wordmark */}
       <div className="flex items-center gap-2">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-amber-500/80 to-amber-700/80 flex items-center justify-center shadow-sm">
-          <Sparkles className="w-3 h-3 text-white" />
-        </div>
+        <AcuityLogo size={20} />
         <span className="text-[12px] font-semibold tracking-wide text-neutral-200">
           Acuity Reader
         </span>

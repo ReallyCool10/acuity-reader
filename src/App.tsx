@@ -3,7 +3,7 @@ import { TitleBarControls } from './components/TitleBarControls';
 import { SearchBar } from './components/SearchBar';
 import { BookCard } from './components/BookCard';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
-import { ReaderModal } from './components/ReaderModal';
+import { ReaderView } from './components/ReaderView';
 import { SettingsModal } from './components/SettingsModal';
 import { FolderPlus, BookOpen } from 'lucide-react';
 import type { MediaItem, LibraryState, MediaType } from './types';
@@ -278,9 +278,9 @@ export default function App() {
         />
       )}
 
-      {/* Reader Modal (EPUB & PDF) */}
+      {/* Dedicated Reader View with prominent Return to Library navigation */}
       {activeBookItem && (
-        <ReaderModal
+        <ReaderView
           item={activeBookItem}
           initialProgress={library.progress[activeBookItem.id]}
           onClose={() => setActiveBookItem(null)}

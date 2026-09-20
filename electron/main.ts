@@ -139,6 +139,7 @@ function createMainWindow() {
       symbolColor: '#e2e8f0', // Clean Fluent symbol contrast
       height: 40,
     },
+    icon: path.join(__dirname, '../resources/icon.ico'),
     backgroundMaterial: 'mica', // Native Windows 11 Mica material
     transparent: true,
     show: true,
@@ -180,7 +181,8 @@ function createMainWindow() {
 
 function createTray() {
   try {
-    const icon = createIcon('tray');
+    const iconPath = path.join(__dirname, '../resources/icon.ico');
+    const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : createIcon('tray');
     tray = new Tray(icon);
     tray.setToolTip('Acuity Reader');
 
