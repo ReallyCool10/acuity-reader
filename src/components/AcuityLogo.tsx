@@ -1,26 +1,46 @@
-import React from 'react';
+import React, { useId } from 'react';
 
 interface AcuityLogoProps {
   size?: number;
   className?: string;
 }
 
-export const AcuityLogo: React.FC<AcuityLogoProps> = ({ size = 22, className = '' }) => {
+export const AcuityLogo: React.FC<AcuityLogoProps> = ({ size = 24, className = '' }) => {
+  const rawId = useId();
+  const gradId = `acuityGrad-${rawId.replace(/:/g, '')}`;
+
   return (
-    <div
-      style={{ width: size, height: size }}
-      className={`relative rounded-[22%] bg-gradient-to-br from-[#2a2d37] to-[#121318] border border-white/15 flex items-center justify-center select-none shadow-xs shrink-0 overflow-hidden ${className}`}
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 100 100"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={`select-none shrink-0 ${className}`}
+      aria-label="Acuity Logo"
     >
-      <span
-        style={{
-          fontSize: size * 0.76,
-          lineHeight: 1,
-          fontFamily: "'Playfair Display', 'Cormorant Garamond', 'Georgia', serif",
-        }}
-        className="font-semibold italic text-neutral-100 transform -translate-y-[6%] select-none tracking-tighter"
+      <defs>
+        <linearGradient id={gradId} x1="10%" y1="10%" x2="90%" y2="90%">
+          {/* Top Left: Light Orange Yellow */}
+          <stop offset="0%" stopColor="#ffd8a8" />
+          <stop offset="35%" stopColor="#fef08a" />
+          {/* Bottom Right: Light Blue */}
+          <stop offset="100%" stopColor="#93c5fd" />
+        </linearGradient>
+      </defs>
+      <text
+        x="48"
+        y="83"
+        fontFamily="'Playfair Display', 'Cormorant Garamond', 'Baskerville', 'Georgia', serif"
+        fontSize="106"
+        fontWeight="600"
+        fontStyle="italic"
+        textAnchor="middle"
+        fill={`url(#${gradId})`}
+        letterSpacing="-2"
       >
         a
-      </span>
-    </div>
+      </text>
+    </svg>
   );
 };

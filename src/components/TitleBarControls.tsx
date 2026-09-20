@@ -37,7 +37,7 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
     >
       {/* Brand logo & title - Elegant lowercase 'a' and refined wordmark */}
       <div className="flex items-center gap-2">
-        <AcuityLogo size={20} />
+        <AcuityLogo size={24} />
         <span className="text-[12px] font-semibold tracking-wide text-neutral-200">
           Acuity Reader
         </span>

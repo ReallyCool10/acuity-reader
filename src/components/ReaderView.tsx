@@ -197,7 +197,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
             <span>Library</span>
           </button>
 
-          <AcuityLogo size={18} />
+          <AcuityLogo size={22} />
         </div>
 
         {/* Center: Title & Chapter Navigation */}
