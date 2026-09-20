@@ -110,9 +110,9 @@ export const ReaderModal: React.FC<ReaderModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-40 bg-neutral-950 flex flex-col text-neutral-100 select-text">
+    <div className="fixed inset-0 z-40 bg-neutral-950/95 backdrop-blur-3xl flex flex-col text-neutral-100 select-text">
       {/* Top Controls Bar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-md select-none">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.08] bg-black/40 backdrop-blur-md select-none">
         <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={onClose}

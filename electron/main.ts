@@ -2,6 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage } 
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import crypto from 'node:crypto';
+import * as mm from 'music-metadata';
+import JSZip from 'jszip';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,11 +16,7 @@ process.on('unhandledRejection', (err: any) => {
   try { fs.writeFileSync(path.join(__dirname, '../main_crash.log'), 'Unhandled: ' + (err?.stack || err)); } catch {}
 });
 
-app.name = 'AcuityReader';
-try {
-  const userDataPath = path.join(app.getPath('appData'), 'AcuityReader');
-  app.setPath('userData', userDataPath);
-} catch {}
+app.name = 'Acuity Reader';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -134,11 +133,16 @@ function createMainWindow() {
     height: winHeight,
     minWidth: 380,
     minHeight: 520,
-    frame: false, // Frameless: no standard titlebar or bulky header
     titleBarStyle: 'hidden',
-    backgroundColor: '#0c0d0e',
+    titleBarOverlay: {
+      color: '#00000000', // Transparent header matching Windows Media Player
+      symbolColor: '#e2e8f0', // Clean Fluent symbol contrast
+      height: 40,
+    },
+    backgroundMaterial: 'mica', // Native Windows 11 Mica material
+    transparent: true,
     show: true,
-    alwaysOnTop: true,
+    alwaysOnTop: false, // Default unpinned so it docks gracefully
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
@@ -288,9 +292,102 @@ ipcMain.handle('dialog:pickFolder', async () => {
   return result.canceled ? null : result.filePaths[0];
 });
 
-// Automated Scanner
+// Automated Scanner & Cover Extraction
 const AUDIO_EXTS = new Set(['.m4b', '.mp3', '.m4a', '.aac', '.flac', '.opus', '.ogg']);
 const BOOK_EXTS = new Set(['.epub', '.pdf']);
+
+function getCoversDir(): string {
+  const dir = path.join(app.getPath('userData'), 'covers');
+  if (!fs.existsSync(dir)) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  }
+  return dir;
+}
+
+async function findOrExtractCover(
+  filePath: string,
+  mediaType: 'audio' | 'book',
+  dirPath: string,
+  fileName: string
+): Promise<string | undefined> {
+  try {
+    const baseName = path.parse(fileName).name;
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+
+    // 1. Sibling image matching book title
+    for (const imgExt of imageExtensions) {
+      const candidate = path.join(dirPath, baseName + imgExt);
+      if (fs.existsSync(candidate)) {
+        return 'file:///' + candidate.replace(/\\/g, '/');
+      }
+    }
+
+    // 2. Folder images: cover.jpg, folder.jpg, front.jpg, albumart.jpg
+    const folderImageNames = [
+      'cover.jpg', 'cover.jpeg', 'cover.png',
+      'folder.jpg', 'folder.jpeg', 'folder.png',
+      'front.jpg', 'front.jpeg', 'front.png',
+      'albumart.jpg', 'albumart.png'
+    ];
+    for (const name of folderImageNames) {
+      const candidate = path.join(dirPath, name);
+      if (fs.existsSync(candidate)) {
+        return 'file:///' + candidate.replace(/\\/g, '/');
+      }
+    }
+
+    const coversDir = getCoversDir();
+
+    // 3. Audio files: Extract embedded picture (ID3 APIC / MP4 covr)
+    if (mediaType === 'audio') {
+      const hash = crypto.createHash('md5').update(filePath).digest('hex');
+      const cachedCoverPath = path.join(coversDir, `${hash}.jpg`);
+      if (fs.existsSync(cachedCoverPath)) {
+        return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
+      }
+
+      try {
+        const metadata = await mm.parseFile(filePath, { skipPostHeaders: true });
+        const picture = metadata.common?.picture?.[0];
+        if (picture && picture.data && picture.data.length > 0) {
+          await fs.promises.writeFile(cachedCoverPath, picture.data);
+          return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
+        }
+      } catch {}
+    }
+
+    // 4. EPUB files: Extract cover from ZIP archive
+    const ext = path.extname(fileName).toLowerCase();
+    if (ext === '.epub') {
+      const hash = crypto.createHash('md5').update(filePath).digest('hex');
+      const cachedCoverPath = path.join(coversDir, `${hash}.jpg`);
+      if (fs.existsSync(cachedCoverPath)) {
+        return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
+      }
+
+      try {
+        const fileData = await fs.promises.readFile(filePath);
+        const zip = await JSZip.loadAsync(fileData);
+        let coverEntry = Object.values(zip.files).find(
+          (f) => !f.dir && /cover.*\.(jpe?g|png|webp)$/i.test(f.name)
+        );
+        if (!coverEntry) {
+          coverEntry = Object.values(zip.files).find(
+            (f) => !f.dir && /\.(jpe?g|png|webp)$/i.test(f.name)
+          );
+        }
+        if (coverEntry) {
+          const imgBuffer = await coverEntry.async('nodebuffer');
+          await fs.promises.writeFile(cachedCoverPath, imgBuffer);
+          return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
+        }
+      } catch {}
+    }
+  } catch (err) {
+    console.error('Cover extraction error:', err);
+  }
+  return undefined;
+}
 
 function cleanTitle(filename: string): { title: string; author: string } {
   const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.')) || filename;
@@ -333,6 +430,7 @@ async function scanRecursive(dirPath: string, items: any[]): Promise<void> {
           const stats = await fs.promises.stat(fullPath);
           const parentDirName = path.basename(dirPath);
           const { title, author } = cleanTitle(entry.name);
+          const coverUrl = await findOrExtractCover(fullPath, mediaType, dirPath, entry.name);
 
           items.push({
             id: Buffer.from(fullPath).toString('base64'),
@@ -344,6 +442,7 @@ async function scanRecursive(dirPath: string, items: any[]): Promise<void> {
             fileSize: stats.size,
             dateAdded: stats.mtimeMs,
             dirName: parentDirName,
+            coverUrl,
           });
         }
       }

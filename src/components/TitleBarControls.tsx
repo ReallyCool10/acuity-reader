@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Pin, PinOff, Minus, X, FolderOpen, RefreshCw } from 'lucide-react';
+import { Pin, PinOff, FolderOpen, RefreshCw, Sparkles } from 'lucide-react';
 
 interface TitleBarControlsProps {
   onOpenSettings: () => void;
@@ -30,67 +30,54 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
   };
 
   return (
-    <div
-      className="flex items-center justify-between px-3.5 py-2 select-none"
+    <header
+      className="flex items-center justify-between h-10 px-3 select-none bg-transparent border-b border-white/[0.06] backdrop-blur-md z-30"
       style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
     >
-      {/* Subtle brand mark */}
+      {/* Brand logo & title - Windows Media Player style */}
       <div className="flex items-center gap-2">
-        <span className="text-[12px] font-medium tracking-wider uppercase text-neutral-400">
-          Acuity
+        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-amber-500/80 to-amber-700/80 flex items-center justify-center shadow-sm">
+          <Sparkles className="w-3 h-3 text-white" />
+        </div>
+        <span className="text-[12px] font-semibold tracking-wide text-neutral-200">
+          Acuity Reader
         </span>
       </div>
 
-      {/* Action buttons (non-draggable) */}
+      {/* Action buttons positioned to the left of native Windows 11 caption controls */}
       <div
-        className="flex items-center gap-1"
+        className="flex items-center gap-1 pr-[140px]"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <button
           onClick={onRescan}
           disabled={isScanning}
-          title="Rescan library"
-          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/60 rounded-md transition-colors"
+          title="Rescan library & covers"
+          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-white/[0.08] active:bg-white/[0.12] rounded-md transition-all"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-neutral-300' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin text-amber-400' : ''}`} />
         </button>
 
         <button
           onClick={onOpenSettings}
           title="Library Folders"
-          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/60 rounded-md transition-colors"
+          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-white/[0.08] active:bg-white/[0.12] rounded-md transition-all"
         >
           <FolderOpen className="w-3.5 h-3.5" />
         </button>
 
         <button
           onClick={togglePin}
-          title={isPinned ? 'Unpin from top' : 'Always on top'}
-          className={`p-1.5 rounded-md transition-colors ${
+          title={isPinned ? 'Unpin (Window acts normally)' : 'Keep on top'}
+          className={`p-1.5 rounded-md transition-all ${
             isPinned
-              ? 'text-amber-400 bg-amber-400/10'
-              : 'text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/60'
+              ? 'text-amber-400 bg-amber-500/20 shadow-sm'
+              : 'text-neutral-400 hover:text-neutral-100 hover:bg-white/[0.08] active:bg-white/[0.12]'
           }`}
         >
           {isPinned ? <Pin className="w-3.5 h-3.5" /> : <PinOff className="w-3.5 h-3.5" />}
         </button>
-
-        <button
-          onClick={() => window.electronAPI?.minimize()}
-          title="Minimize"
-          className="p-1.5 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/60 rounded-md transition-colors"
-        >
-          <Minus className="w-3.5 h-3.5" />
-        </button>
-
-        <button
-          onClick={() => window.electronAPI?.close()}
-          title="Close"
-          className="p-1.5 text-neutral-400 hover:text-red-400 hover:bg-red-500/10 rounded-md transition-colors"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
       </div>
-    </div>
+    </header>
   );
 };

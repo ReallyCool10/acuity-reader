@@ -9,6 +9,7 @@ import {
   VolumeX,
   Bookmark,
   BookOpen,
+  Headphones,
 } from 'lucide-react';
 import type { MediaItem } from '../types';
 
@@ -127,7 +128,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   };
 
   return (
-    <div className="border-t border-neutral-800 bg-neutral-950/95 backdrop-blur-md p-3 flex flex-col gap-2 select-none">
+    <div className="border-t border-white/[0.08] bg-black/60 backdrop-blur-2xl p-3 flex flex-col gap-2 select-none shadow-2xl">
       <audio
         ref={audioRef}
         src={audioSrc}
@@ -140,9 +141,22 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
       {/* Track Info & Quick Actions */}
       <div className="flex items-center justify-between text-xs">
-        <div className="min-w-0 pr-2">
-          <p className="font-medium text-neutral-100 truncate">{item.title}</p>
-          <p className="text-[11px] text-neutral-500 truncate">{item.author}</p>
+        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+          {item.coverUrl ? (
+            <img
+              src={item.coverUrl}
+              alt=""
+              className="w-9 h-11 object-cover rounded shadow-md border border-white/10 shrink-0"
+            />
+          ) : (
+            <div className="w-9 h-11 rounded bg-neutral-900 border border-white/10 flex items-center justify-center shrink-0 shadow-sm">
+              <Headphones className="w-4 h-4 text-amber-400/80" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <p className="font-semibold text-neutral-100 truncate">{item.title}</p>
+            <p className="text-[11px] text-neutral-400 truncate">{item.author}</p>
+          </div>
         </div>
 
         <div className="flex items-center gap-1 shrink-0">

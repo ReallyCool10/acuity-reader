@@ -25,19 +25,6 @@ export default function App() {
   const [activeAudioItem, setActiveAudioItem] = useState<MediaItem | null>(null);
   const [activeBookItem, setActiveBookItem] = useState<MediaItem | null>(null);
 
-  // Initial load from persistent storage
-  useEffect(() => {
-    async function init() {
-      if (window.electronAPI) {
-        const saved = await window.electronAPI.loadLibrary();
-        if (saved && Array.isArray(saved.items)) {
-          setLibrary(saved);
-        }
-      }
-    }
-    init();
-  }, []);
-
   // Persist library state
   const persistLibrary = useCallback((nextState: LibraryState) => {
     setLibrary(nextState);
@@ -82,6 +69,23 @@ export default function App() {
     },
     []
   );
+
+  // Initial load from persistent storage
+  useEffect(() => {
+    async function init() {
+      if (window.electronAPI) {
+        const saved = await window.electronAPI.loadLibrary();
+        if (saved && Array.isArray(saved.items)) {
+          setLibrary(saved);
+          // If library has folders and items lack covers, refresh in background
+          if (saved.folders && saved.folders.length > 0 && saved.items.some((i: MediaItem) => !i.coverUrl)) {
+            scanFolders(saved.folders);
+          }
+        }
+      }
+    }
+    init();
+  }, [scanFolders]);
 
   // Add a new parent directory
   const handleAddFolder = async () => {
@@ -197,8 +201,8 @@ export default function App() {
   }, [library.items]);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-[#0c0d0e] text-neutral-100 overflow-hidden font-sans">
-      {/* Frameless Top Bar Controls (No bulky header) */}
+    <div className="flex flex-col h-screen w-screen bg-black/40 backdrop-blur-3xl text-neutral-100 overflow-hidden font-sans select-none">
+      {/* Windows Media Player style transparent header */}
       <TitleBarControls
         onOpenSettings={() => setIsSettingsOpen(true)}
         onRescan={handleRescan}
@@ -214,21 +218,21 @@ export default function App() {
         counts={counts}
       />
 
-      {/* Main Bookshelf Area */}
-      <div className="flex-1 overflow-y-auto px-3.5 pb-4">
+      {/* Main Apple Bookshelf Area */}
+      <div className="flex-1 overflow-y-auto px-4 pb-6">
         {filteredItems.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-500">
-              <BookOpen className="w-6 h-6" />
+          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
+            <div className="w-14 h-14 rounded-2xl bg-white/[0.05] border border-white/[0.1] flex items-center justify-center text-neutral-400 shadow-md">
+              <BookOpen className="w-7 h-7" />
             </div>
 
-            <div className="space-y-1">
-              <h3 className="text-sm font-medium text-neutral-200">
-                {library.folders.length === 0 ? 'Welcome to Acuity' : 'No titles found'}
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-semibold text-neutral-200">
+                {library.folders.length === 0 ? 'Welcome to Acuity Reader' : 'No titles found'}
               </h3>
-              <p className="text-xs text-neutral-500 max-w-[240px] leading-relaxed">
+              <p className="text-xs text-neutral-400 max-w-[260px] leading-relaxed">
                 {library.folders.length === 0
-                  ? 'Point Acuity to any folder containing audiobooks and e-books.'
+                  ? 'Add your audiobooks and e-books folder. Covers and metadata are discovered automatically.'
                   : 'Try adjusting your search query or filter pills above.'}
               </p>
             </div>
@@ -236,15 +240,15 @@ export default function App() {
             {library.folders.length === 0 && (
               <button
                 onClick={handleAddFolder}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium bg-neutral-100 text-neutral-900 rounded-lg hover:bg-white transition-all shadow-sm"
+                className="flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-white text-neutral-900 rounded-lg hover:bg-neutral-100 active:scale-95 transition-all shadow-md cursor-pointer"
               >
-                <FolderPlus className="w-3.5 h-3.5" />
+                <FolderPlus className="w-4 h-4" />
                 <span>Select Library Folder</span>
               </button>
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-1">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-6 pt-2 pb-4">
             {filteredItems.map((item) => (
               <BookCard
                 key={item.id}
