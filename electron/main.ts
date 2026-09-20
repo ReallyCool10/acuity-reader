@@ -1,6 +1,23 @@
 import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+process.on('uncaughtException', (err) => {
+  try { fs.writeFileSync(path.join(__dirname, '../main_crash.log'), 'Uncaught: ' + err.stack); } catch {}
+});
+process.on('unhandledRejection', (err: any) => {
+  try { fs.writeFileSync(path.join(__dirname, '../main_crash.log'), 'Unhandled: ' + (err?.stack || err)); } catch {}
+});
+
+app.name = 'AcuityReader';
+try {
+  const userDataPath = path.join(app.getPath('appData'), 'AcuityReader');
+  app.setPath('userData', userDataPath);
+} catch {}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -104,6 +121,12 @@ function createMainWindow() {
   const winX = workX + screenWidth - winWidth;
   const winY = workY;
 
+  function logStep(msg: string) {
+    try { fs.appendFileSync(path.join(__dirname, '../main_steps.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch {}
+  }
+
+  logStep(`Creating BrowserWindow at x=${winX}, y=${winY}, size=${winWidth}x${winHeight}`);
+
   mainWindow = new BrowserWindow({
     x: winX,
     y: winY,
@@ -114,7 +137,8 @@ function createMainWindow() {
     frame: false, // Frameless: no standard titlebar or bulky header
     titleBarStyle: 'hidden',
     backgroundColor: '#0c0d0e',
-    show: false,
+    show: true,
+    alwaysOnTop: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
@@ -123,18 +147,29 @@ function createMainWindow() {
     },
   });
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-    updateThumbarButtons(false);
+  mainWindow.show();
+  mainWindow.focus();
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    logStep('Renderer did-finish-load event fired');
+    try { updateThumbarButtons(false); } catch (e: any) { logStep('updateThumbarButtons err: ' + e.message); }
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_, code, desc) => {
+    logStep(`did-fail-load: code=${code}, desc=${desc}`);
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
+    logStep('Loading VITE_DEV_SERVER_URL: ' + process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    const indexPath = path.join(__dirname, '../dist/index.html');
+    logStep('Loading file: ' + indexPath);
+    mainWindow.loadFile(indexPath);
   }
 
   mainWindow.on('closed', () => {
+    logStep('mainWindow closed event fired');
     mainWindow = null;
   });
 }
@@ -345,12 +380,15 @@ ipcMain.handle('scanner:scanFolder', async (_, folderPath: string) => {
 });
 
 // Persistent Storage
-const storageFilePath = path.join(app.getPath('userData'), 'acuity_library.json');
+function getStorageFilePath() {
+  return path.join(app.getPath('userData'), 'acuity_library.json');
+}
 
 ipcMain.handle('storage:load', async () => {
   try {
-    if (fs.existsSync(storageFilePath)) {
-      const data = await fs.promises.readFile(storageFilePath, 'utf8');
+    const filePath = getStorageFilePath();
+    if (fs.existsSync(filePath)) {
+      const data = await fs.promises.readFile(filePath, 'utf8');
       return JSON.parse(data);
     }
   } catch (err) {
@@ -361,7 +399,8 @@ ipcMain.handle('storage:load', async () => {
 
 ipcMain.handle('storage:save', async (_, data: any) => {
   try {
-    await fs.promises.writeFile(storageFilePath, JSON.stringify(data, null, 2), 'utf8');
+    const filePath = getStorageFilePath();
+    await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
     return true;
   } catch (err) {
     console.error('Error saving library data:', err);
@@ -380,13 +419,23 @@ ipcMain.handle('file:readBase64', async (_, filePath: string) => {
   }
 });
 
-app.whenReady().then(() => {
-  createMainWindow();
-  createTray();
+function initApp() {
+  try {
+    createMainWindow();
+    createTray();
+  } catch (err: any) {
+    try { fs.writeFileSync(path.join(__dirname, '../startup_err.log'), 'Init Error: ' + err.stack); } catch {}
+  }
+}
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
-  });
+if (app.isReady()) {
+  initApp();
+} else {
+  app.whenReady().then(initApp);
+}
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
 });
 
 app.on('window-all-closed', () => {
