@@ -197,6 +197,7 @@ export function extractText(root: Element | null): string {
 
     const el = node as Element;
     const tag = el.tagName.toUpperCase();
+    if (tag === 'SCRIPT' || tag === 'STYLE') return;
     if (tag === 'BR') {
       out += '\n';
       return;
@@ -285,10 +286,9 @@ export async function parseEpub(data: ArrayBuffer | Uint8Array): Promise<EpubBoo
     if (!entry) continue;
 
     const doc = new DOMParser().parseFromString(await entry.async('text'), 'text/html');
+    const html = await sanitiseChapter(zip, doc, dirOf(chapterPath), imageCache);
     const text = extractText(doc.body);
     if (countWords(text) < 8) continue; // skip empty separator pages
-
-    const html = await sanitiseChapter(zip, doc, dirOf(chapterPath), imageCache);
     const heading = doc.querySelector('h1, h2, h3, h4')?.textContent?.trim();
 
     chapters.push({

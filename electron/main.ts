@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import * as mm from 'music-metadata';
 import JSZip from 'jszip';
+import { registerAllowedRoot, isAllowedPath } from './paths';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -68,34 +69,6 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-/** Directories the renderer is permitted to read from: library roots + our cover cache. */
-const allowedRoots = new Set<string>();
-
-function registerAllowedRoot(dir: string | undefined | null) {
-  if (!dir) return;
-  try {
-    allowedRoots.add(path.resolve(dir));
-  } catch {
-    // Ignore unusable paths.
-  }
-}
-
-/**
- * True when `target` sits inside one of the allowed roots.
- *
- * Compares resolved paths segment-wise via path.relative rather than by string
- * prefix: a prefix test would let "/books-private" through on the strength of an
- * allowed "/books".
- */
-function isAllowedPath(target: string): boolean {
-  const resolved = path.resolve(target);
-  for (const root of allowedRoots) {
-    const rel = path.relative(root, resolved);
-    if (rel === '') return true;
-    if (!rel.startsWith('..') && !path.isAbsolute(rel)) return true;
-  }
-  return false;
-}
 
 const CONTENT_TYPES: Record<string, string> = {
   '.aac': 'audio/aac',
