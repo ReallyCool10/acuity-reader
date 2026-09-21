@@ -102,3 +102,64 @@ export function clearHighlight(): void {
 export function isHighlightSupported(): boolean {
   return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof Highlight !== 'undefined';
 }
+
+export interface NarrationChunk {
+  text: string;
+  startChar: number;
+  endChar: number;
+}
+
+/**
+ * Splits chapter prose into natural sentence/paragraph chunks for fast-starting,
+ * pre-buffered neural synthesis.
+ */
+export function splitNarrationChunks(text: string, maxLen: number = 700): NarrationChunk[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+
+  const chunks: NarrationChunk[] = [];
+  const terminators = /[.!?]["')\]]?\s|\n\n/g;
+  let chunkStart = 0;
+  let lastBoundary = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = terminators.exec(text)) !== null) {
+    const boundary = match.index + match[0].length;
+    if (boundary - chunkStart > maxLen && lastBoundary > chunkStart) {
+      const chunkText = text.slice(chunkStart, lastBoundary).trim();
+      if (chunkText) {
+        chunks.push({
+          text: chunkText,
+          startChar: chunkStart,
+          endChar: lastBoundary,
+        });
+      }
+      chunkStart = lastBoundary;
+    }
+    lastBoundary = boundary;
+  }
+
+  const remaining = text.slice(chunkStart).trim();
+  if (remaining) {
+    chunks.push({
+      text: remaining,
+      startChar: chunkStart,
+      endChar: text.length,
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * Converts a base64 audio string (e.g. MP3) into an object URL for HTMLAudioElement.
+ */
+export function base64ToBlobUrl(base64: string, mimeType: string = 'audio/mp3'): string {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  const blob = new Blob([bytes], { type: mimeType });
+  return URL.createObjectURL(blob);
+}

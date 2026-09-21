@@ -23,7 +23,8 @@ import { registerAllowedRoot, isAllowedPath } from './paths';
 import { computeStableId, migrateLibraryState } from './id';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
-import type { AudioChapter } from '../src/types';
+import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
+import type { AudioChapter, SynthesisOptions } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -820,6 +821,16 @@ ipcMain.handle('system:getThemeInfo', async () => {
     isDark: nativeTheme.shouldUseDarkColors,
     accentColor: getSystemAccentColor(),
   };
+});
+
+/** Return available Microsoft Edge neural voices */
+ipcMain.handle('tts:getEdgeVoices', async () => {
+  return getEdgeVoices();
+});
+
+/** Synthesize speech via Edge Neural TTS */
+ipcMain.handle('tts:synthesizeEdge', async (_event, options: SynthesisOptions) => {
+  return synthesizeEdgeSpeech(options);
 });
 
 /* -------------------------------------------------------------- lifecycle */

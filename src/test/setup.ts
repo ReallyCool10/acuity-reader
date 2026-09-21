@@ -1,13 +1,10 @@
 // Setup file for Vitest in jsdom environment
 
-if (typeof URL.createObjectURL === 'undefined') {
-  URL.createObjectURL = (_blob: Blob | MediaSource) =>
-    `blob:stub-${Math.random().toString(36).slice(2)}`;
-}
+URL.createObjectURL = (_blob: Blob | MediaSource) =>
+  `blob:stub-${Math.random().toString(36).slice(2)}`;
 
-if (typeof URL.revokeObjectURL === 'undefined') {
-  URL.revokeObjectURL = (_url: string) => {};
-}
+URL.revokeObjectURL = (_url: string) => {};
+
 
 if (typeof Element.prototype.scrollIntoView === 'undefined') {
   Element.prototype.scrollIntoView = () => {};

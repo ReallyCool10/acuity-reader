@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { LibraryState, MediaItem, ThemeInfo } from '../src/types';
+import type { LibraryState, MediaItem, ThemeInfo, EdgeVoice, EdgeSynthesisResult, SynthesisOptions } from '../src/types';
 
 export interface ScanProgress {
   count: number;
@@ -26,6 +26,8 @@ export interface ElectronAPI {
   onPlayerCommand: (callback: (command: PlayerCommand) => void) => () => void;
   onPinChanged: (callback: (isPinned: boolean) => void) => () => void;
   onScanProgress: (callback: (progress: ScanProgress) => void) => () => void;
+  getEdgeVoices: () => Promise<EdgeVoice[]>;
+  synthesizeEdge: (options: SynthesisOptions) => Promise<EdgeSynthesisResult>;
 }
 
 /** Wrap an ipcRenderer subscription so callers get an unsubscribe function back. */
@@ -53,6 +55,8 @@ const api: ElectronAPI = {
   onPlayerCommand: (callback) => subscribe('player:command', callback),
   onPinChanged: (callback) => subscribe('window:pinned-changed', callback),
   onScanProgress: (callback) => subscribe('scanner:progress', callback),
+  getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
+  synthesizeEdge: (options) => ipcRenderer.invoke('tts:synthesizeEdge', options),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

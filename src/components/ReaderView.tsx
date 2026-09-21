@@ -17,7 +17,7 @@ import {
   Trash2,
   Type,
 } from 'lucide-react';
-import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice, EdgeSynthesisResult } from '../types';
 import { parseEpub, type EpubChapter } from '../lib/epub';
 import { PdfReaderView } from './PdfReaderView';
 import { canRenderInReader } from '../lib/media';
@@ -29,8 +29,21 @@ import {
   clearHighlight,
   highlightSentence,
   isHighlightSupported,
+  splitNarrationChunks,
+  base64ToBlobUrl,
   type NarrationMap,
 } from '../lib/narration';
+
+const FALLBACK_VOICE_CHOICES: { name: string; label: string }[] = [
+  { name: 'en-US-JennyNeural', label: 'Jenny (US) — Natural, Warm ★' },
+  { name: 'en-US-GuyNeural', label: 'Guy (US) — Natural, Conversational ★' },
+  { name: 'en-US-AriaNeural', label: 'Aria (US) — Crisp, Clear ★' },
+  { name: 'en-GB-SoniaNeural', label: 'Sonia (UK) — Melodic, British ★' },
+  { name: 'en-GB-RyanNeural', label: 'Ryan (UK) — Articulate, British ★' },
+  { name: 'en-AU-WilliamMultilingualNeural', label: 'William (AU) — Australian' },
+  { name: 'en-CA-ClaraNeural', label: 'Clara (CA) — Canadian' },
+  { name: 'en-IE-EmilyNeural', label: 'Emily (IE) — Irish' },
+];
 
 interface ReaderViewProps {
   item: MediaItem;
@@ -83,11 +96,225 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const [typeface, setTypeface] = usePersistentState<'serif' | 'sans'>('acuity.reader.typeface', 'serif');
   const [theme, setTheme] = usePersistentState<ReadingTheme>('acuity.reader.theme', 'dark');
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
+  const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
+  const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
+  const narrationAudioRef = useRef<HTMLAudioElement | null>(null);
+  const narrationAbortRef = useRef<AbortController | null>(null);
+  const prefetchPromiseRef = useRef<Promise<EdgeSynthesisResult> | null>(null);
+
+  useEffect(() => {
+    if (window.electronAPI?.getEdgeVoices) {
+      window.electronAPI
+        .getEdgeVoices()
+        .then((voices) => {
+          if (voices && voices.length > 0) {
+            setEdgeVoices(voices);
+          }
+        })
+        .catch((err) => {
+          console.warn('Failed to load Edge neural voices:', err);
+        });
+    }
+  }, []);
 
   useDismissable(appearanceRef, isAppearanceOpen, () => setIsAppearanceOpen(false));
   useDismissable(tocRef, isTocOpen, () => setIsTocOpen(false));
 
   const currentChapter = chapters[chapterIndex];
+
+  /* ---------------------------------------------------------- narration */
+
+  const stopNarration = useCallback(() => {
+    if (narrationAbortRef.current) {
+      narrationAbortRef.current.abort();
+      narrationAbortRef.current = null;
+    }
+    prefetchPromiseRef.current = null;
+    if (narrationAudioRef.current) {
+      narrationAudioRef.current.pause();
+      narrationAudioRef.current.src = '';
+      narrationAudioRef.current.ontimeupdate = null;
+      narrationAudioRef.current.onended = null;
+      narrationAudioRef.current.onerror = null;
+    }
+    window.speechSynthesis?.cancel();
+    clearHighlight();
+    setIsNarrating(false);
+  }, []);
+
+  const fallbackLocalSpeech = useCallback(
+    (map: NarrationMap) => {
+      window.speechSynthesis?.cancel();
+      const utterance = new SpeechSynthesisUtterance(map.text);
+      utterance.rate = narrationRate;
+
+      utterance.onboundary = (event) => {
+        const currentMap = narrationMapRef.current;
+        if (!currentMap) return;
+        const range = highlightSentence(currentMap, event.charIndex);
+        const rect = range?.getBoundingClientRect();
+        const host = scrollRef.current;
+        if (rect && host) {
+          const hostRect = host.getBoundingClientRect();
+          if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
+            host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
+          }
+        }
+      };
+
+      utterance.onend = () => {
+        clearHighlight();
+        setIsNarrating(false);
+      };
+      utterance.onerror = () => {
+        clearHighlight();
+        setIsNarrating(false);
+      };
+
+      setIsNarrating(true);
+      window.speechSynthesis?.speak(utterance);
+    },
+    [narrationRate]
+  );
+
+  const startNarration = useCallback(() => {
+    const container = proseRef.current;
+    if (!container) return;
+
+    const map = buildNarrationMap(container);
+    if (!map.text.trim()) return;
+    narrationMapRef.current = map;
+
+    stopNarration();
+
+    const api = window.electronAPI;
+    const useEdge =
+      ttsVoice !== 'system-local' &&
+      api !== undefined &&
+      typeof api.synthesizeEdge === 'function';
+
+    if (useEdge && api) {
+      const abortController = new AbortController();
+      narrationAbortRef.current = abortController;
+      setIsNarrating(true);
+
+      const chunks = splitNarrationChunks(map.text, 800);
+      if (chunks.length === 0) {
+        setIsNarrating(false);
+        return;
+      }
+
+      if (!narrationAudioRef.current) {
+        narrationAudioRef.current = new Audio();
+      }
+      const audio = narrationAudioRef.current;
+      let currentBlobUrl: string | null = null;
+
+      const playChunkAt = async (index: number) => {
+        if (abortController.signal.aborted) return;
+        if (index >= chunks.length) {
+          stopNarration();
+          return;
+        }
+
+        const chunk = chunks[index];
+
+        try {
+          const synthesisResult = prefetchPromiseRef.current
+            ? await prefetchPromiseRef.current
+            : await api.synthesizeEdge({
+                text: chunk.text,
+                voice: ttsVoice,
+                rate: narrationRate,
+              });
+          prefetchPromiseRef.current = null;
+
+          if (abortController.signal.aborted) return;
+
+          // Pre-fetch next chunk concurrently in background
+          if (index + 1 < chunks.length) {
+            prefetchPromiseRef.current = api.synthesizeEdge({
+              text: chunks[index + 1].text,
+              voice: ttsVoice,
+              rate: narrationRate,
+            });
+          }
+
+          if (currentBlobUrl) {
+            URL.revokeObjectURL(currentBlobUrl);
+          }
+          currentBlobUrl = base64ToBlobUrl(synthesisResult.audioBase64, synthesisResult.mimeType);
+          audio.src = currentBlobUrl;
+
+          audio.ontimeupdate = () => {
+            if (abortController.signal.aborted) return;
+            const currentMap = narrationMapRef.current;
+            if (!currentMap) return;
+
+            const timeMs = audio.currentTime * 1000;
+            let active = synthesisResult.boundaries.find(
+              (b) => timeMs >= b.offsetMs && timeMs < b.offsetMs + b.durationMs
+            );
+            if (!active) {
+              for (let i = synthesisResult.boundaries.length - 1; i >= 0; i--) {
+                if (timeMs >= synthesisResult.boundaries[i].offsetMs) {
+                  active = synthesisResult.boundaries[i];
+                  break;
+                }
+              }
+            }
+
+            if (active) {
+              const relIdx = chunk.text.indexOf(active.text);
+              const globalCharIdx = chunk.startChar + (relIdx !== -1 ? relIdx : 0);
+              const range = highlightSentence(currentMap, globalCharIdx);
+              const rect = range?.getBoundingClientRect();
+              const host = scrollRef.current;
+              if (rect && host) {
+                const hostRect = host.getBoundingClientRect();
+                if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
+                  host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
+                }
+              }
+            }
+          };
+
+          audio.onended = () => {
+            if (currentBlobUrl) {
+              URL.revokeObjectURL(currentBlobUrl);
+              currentBlobUrl = null;
+            }
+            void playChunkAt(index + 1);
+          };
+
+          audio.onerror = () => {
+            if (currentBlobUrl) {
+              URL.revokeObjectURL(currentBlobUrl);
+              currentBlobUrl = null;
+            }
+            console.warn('Edge TTS playback failed, falling back to local speech');
+            fallbackLocalSpeech(map);
+          };
+
+          await audio.play();
+        } catch (err) {
+          if (abortController.signal.aborted) return;
+          console.warn('Edge TTS synthesis failed, falling back to local speech:', err);
+          fallbackLocalSpeech(map);
+        }
+      };
+
+      void playChunkAt(0);
+      return;
+    }
+
+    fallbackLocalSpeech(map);
+  }, [fallbackLocalSpeech, narrationRate, stopNarration, ttsVoice]);
+
+  const toggleNarration = useCallback(() => {
+    if (isNarrating) stopNarration();
+    else startNarration();
+  }, [isNarrating, startNarration, stopNarration]);
 
   /* ------------------------------------------------------------ load book */
 
@@ -130,10 +357,10 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       cancelled = true;
       // Blob URLs for embedded images leak for the lifetime of the window otherwise.
       mintedUrls.forEach((url) => URL.revokeObjectURL(url));
-      window.speechSynthesis.cancel();
-      clearHighlight();
+      stopNarration();
     };
-  }, [item]);
+  }, [item, stopNarration]);
+
 
   /* ----------------------------------------------------------- progress */
 
@@ -198,60 +425,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     });
     return () => cancelAnimationFrame(frame);
   }, [chapterIndex, status]);
-
-  /* ---------------------------------------------------------- narration */
-
-  const stopNarration = useCallback(() => {
-    window.speechSynthesis.cancel();
-    clearHighlight();
-    setIsNarrating(false);
-  }, []);
-
-  const startNarration = useCallback(() => {
-    const container = proseRef.current;
-    if (!container) return;
-
-    const map = buildNarrationMap(container);
-    if (!map.text.trim()) return;
-    narrationMapRef.current = map;
-
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(map.text);
-    utterance.rate = narrationRate;
-
-    utterance.onboundary = (event) => {
-      const currentMap = narrationMapRef.current;
-      if (!currentMap) return;
-      const range = highlightSentence(currentMap, event.charIndex);
-      // Keep the spoken sentence in view without yanking the page on every word.
-      const rect = range?.getBoundingClientRect();
-      const host = scrollRef.current;
-      if (rect && host) {
-        const hostRect = host.getBoundingClientRect();
-        if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
-          host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
-        }
-      }
-    };
-
-    utterance.onend = () => {
-      clearHighlight();
-      setIsNarrating(false);
-    };
-    utterance.onerror = () => {
-      clearHighlight();
-      setIsNarrating(false);
-    };
-
-    setIsNarrating(true);
-    window.speechSynthesis.speak(utterance);
-  }, [narrationRate]);
-
-  const toggleNarration = useCallback(() => {
-    if (isNarrating) stopNarration();
-    else startNarration();
-  }, [isNarrating, startNarration, stopNarration]);
 
   /* Narration is bound to one chapter's DOM; moving chapters must end it. */
   useEffect(() => {
@@ -559,6 +732,33 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
                       </button>
                     ))}
                   </div>
+                </Section>
+
+                <Section label="Read Aloud voice">
+                  <select
+                    value={ttsVoice}
+                    onChange={(e) => setTtsVoice(e.target.value)}
+                    aria-label="Read Aloud Voice"
+                    className="w-full rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none"
+                  >
+                    <optgroup label="Microsoft Edge Neural">
+                      {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => {
+                        const value = 'name' in v ? v.name : (v as { name: string; label: string }).name;
+                        const label =
+                          'friendlyName' in v
+                            ? (v as EdgeVoice).friendlyName.replace('Microsoft ', '').replace(' Online (Natural)', '')
+                            : (v as { name: string; label: string }).label;
+                        return (
+                          <option key={value} value={value}>
+                            {label}
+                          </option>
+                        );
+                      })}
+                    </optgroup>
+                    <optgroup label="Local System">
+                      <option value="system-local">System Local Voice (Offline)</option>
+                    </optgroup>
+                  </select>
                 </Section>
 
                 <Section label="Narration speed">

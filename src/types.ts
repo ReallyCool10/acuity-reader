@@ -79,3 +79,32 @@ export interface ThemeInfo {
   accentColor: string | null;
 }
 
+export interface EdgeVoice {
+  name: string;
+  friendlyName: string;
+  locale: string;
+  gender: 'Female' | 'Male';
+  suggested?: boolean;
+}
+
+export interface EdgeBoundary {
+  offsetMs: number;
+  durationMs: number;
+  text: string;
+  length: number;
+  type: 'word' | 'sentence';
+}
+
+export interface EdgeSynthesisResult {
+  audioBase64: string;
+  mimeType: string;
+  boundaries: EdgeBoundary[];
+}
+
+export interface SynthesisOptions {
+  text: string;
+  voice?: string;
+  rate?: number;
+  pitch?: number;
+}
+
