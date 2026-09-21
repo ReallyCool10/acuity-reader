@@ -1,31 +1,51 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
-  Headphones,
-  Play,
-  Square,
-  Type,
   Bookmark,
   ChevronLeft,
   ChevronRight,
-  Sun,
-  Moon,
   Coffee,
+  FolderOpen,
+  Headphones,
+  List,
+  Minus,
+  Moon,
+  Play,
+  Plus,
+  Square,
+  Sun,
+  Type,
 } from 'lucide-react';
-import JSZip from 'jszip';
 import type { MediaItem, ProgressItem } from '../types';
-import { AcuityLogo } from './AcuityLogo';
+import { parseEpub, type EpubChapter } from '../lib/epub';
+import { canRenderInReader } from '../lib/media';
+import { formatReadingTime } from '../lib/format';
+import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
+import { useDismissable } from '../hooks/useDismissable';
+import {
+  buildNarrationMap,
+  clearHighlight,
+  highlightSentence,
+  isHighlightSupported,
+  type NarrationMap,
+} from '../lib/narration';
 
 interface ReaderViewProps {
   item: MediaItem;
   initialProgress?: ProgressItem;
   onClose: () => void;
-  onProgressUpdate: (itemId: string, page: number, percent: number) => void;
-  onAddBookmark: (itemId: string, page: number) => void;
+  onProgressUpdate: (itemId: string, chapterIndex: number, percent: number, scroll: number) => void;
+  onAddBookmark: (itemId: string, chapterIndex: number, excerpt: string) => void;
   onSwitchToAudio?: (companionPath: string) => void;
 }
 
 type ReadingTheme = 'dark' | 'sepia' | 'light';
+
+const THEMES: { key: ReadingTheme; label: string; icon: typeof Moon }[] = [
+  { key: 'dark', label: 'Dark', icon: Moon },
+  { key: 'sepia', label: 'Sepia', icon: Coffee },
+  { key: 'light', label: 'Light', icon: Sun },
+];
 
 export const ReaderView: React.FC<ReaderViewProps> = ({
   item,
@@ -35,395 +55,647 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   onAddBookmark,
   onSwitchToAudio,
 }) => {
-  const [chapters, setChapters] = useState<{ title: string; text: string }[]>([]);
-  const [currentChapterIdx, setCurrentChapterIdx] = useState(
-    initialProgress?.pdfPage ? Math.max(0, initialProgress.pdfPage - 1) : 0
-  );
-  const [fontSize, setFontSize] = useState(17);
-  const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
-  const [theme, setTheme] = useState<ReadingTheme>('dark');
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const proseRef = useRef<HTMLDivElement | null>(null);
+  const appearanceRef = useRef<HTMLDivElement | null>(null);
+  const tocRef = useRef<HTMLDivElement | null>(null);
+  const narrationMapRef = useRef<NarrationMap | null>(null);
+  /** Set while restoring a saved position, to stop the scroll handler overwriting it. */
+  const restoringRef = useRef(false);
+
+  const [chapters, setChapters] = useState<EpubChapter[]>([]);
+  const [chapterIndex, setChapterIndex] = useState(initialProgress?.chapterIndex ?? 0);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'unsupported'>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
   const [isNarrating, setIsNarrating] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
-  const contentContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isTocOpen, setIsTocOpen] = useState(false);
 
-  // Load real EPUB text if possible, or fallback to clean reader structure
+  const [fontSize, setFontSize] = usePersistentState('acuity.reader.fontSize', 18);
+  const [lineHeight, setLineHeight] = usePersistentState('acuity.reader.lineHeight', 1.72);
+  const [typeface, setTypeface] = usePersistentState<'serif' | 'sans'>('acuity.reader.typeface', 'serif');
+  const [theme, setTheme] = usePersistentState<ReadingTheme>('acuity.reader.theme', 'dark');
+  const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
+
+  useDismissable(appearanceRef, isAppearanceOpen, () => setIsAppearanceOpen(false));
+  useDismissable(tocRef, isTocOpen, () => setIsTocOpen(false));
+
+  const currentChapter = chapters[chapterIndex];
+
+  /* ------------------------------------------------------------ load book */
+
   useEffect(() => {
-    let isCancelled = false;
+    let cancelled = false;
+    let mintedUrls: string[] = [];
 
-    async function loadContent() {
-      setIsLoading(true);
-      const ext = item.format.toLowerCase();
+    async function load() {
+      setStatus('loading');
 
-      if (ext === 'epub') {
-        try {
-          // If local file path, read file using fetch or electron fs
-          const res = await fetch(item.filePath.startsWith('file://') ? item.filePath : 'file:///' + item.filePath.replace(/\\/g, '/'));
-          const buffer = await res.arrayBuffer();
-          const zip = await JSZip.loadAsync(buffer);
-
-          // Find all xhtml / html documents
-          const htmlFiles = Object.values(zip.files).filter(
-            (f) => !f.dir && /\.(x?html|xml)$/i.test(f.name) && !f.name.includes('toc')
-          );
-
-          if (htmlFiles.length > 0) {
-            const parsedChapters: { title: string; text: string }[] = [];
-            for (let i = 0; i < Math.min(htmlFiles.length, 30); i++) {
-              const htmlStr = await htmlFiles[i].async('text');
-              const parser = new DOMParser();
-              const doc = parser.parseFromString(htmlStr, 'text/html');
-
-              // Extract readable body text
-              const body = doc.body;
-              if (body) {
-                // Remove scripts, styles
-                const scripts = body.querySelectorAll('script, style');
-                scripts.forEach((s) => s.remove());
-
-                const text = body.innerText?.trim() || '';
-                if (text.length > 80) {
-                  const heading = doc.querySelector('h1, h2, h3')?.textContent?.trim();
-                  parsedChapters.push({
-                    title: heading || `Chapter ${parsedChapters.length + 1}`,
-                    text,
-                  });
-                }
-              }
-            }
-
-            if (!isCancelled && parsedChapters.length > 0) {
-              setChapters(parsedChapters);
-              setIsLoading(false);
-              return;
-            }
-          }
-        } catch {
-          // Fall back gracefully
-        }
+      if (!canRenderInReader(item)) {
+        setStatus('unsupported');
+        return;
       }
 
-      // Default editorial sample / preview for PDF or when parsing is not direct
-      if (!isCancelled) {
-        setChapters([
-          {
-            title: item.title,
-            text: `Welcome to Acuity Reader's reader edition for "${item.title}".\n\nAuthored by ${item.author || 'Unknown'}.\n\nAcuity provides synchronized cross-modal reading and listening for your library. When an audiobook companion edition is present in your library, you can switch seamlessly between listening and reading with a single click.\n\nUse the Read Aloud toggle in the top bar to have Acuity narrate this chapter using high-quality local speech synthesis. You can also customize your typography, toggle between light, dark, and warm sepia themes, and bookmark memorable passages.\n\nEnjoy an immersive, distraction-free reading experience.`,
-          },
-        ]);
-        setIsLoading(false);
+      try {
+        const bytes = await window.electronAPI?.readBytes(item.filePath);
+        if (!bytes) throw new Error('The file could not be read from disk.');
+
+        const book = await parseEpub(bytes);
+        if (cancelled) {
+          book.objectUrls.forEach((url) => URL.revokeObjectURL(url));
+          return;
+        }
+
+        mintedUrls = book.objectUrls;
+        setChapters(book.chapters);
+        setChapterIndex((prev) => Math.min(prev, book.chapters.length - 1));
+        setStatus('ready');
+      } catch (err) {
+        if (cancelled) return;
+        setErrorMessage(err instanceof Error ? err.message : 'This book could not be opened.');
+        setStatus('error');
       }
     }
 
-    loadContent();
+    void load();
+
     return () => {
-      isCancelled = true;
+      cancelled = true;
+      // Blob URLs for embedded images leak for the lifetime of the window otherwise.
+      mintedUrls.forEach((url) => URL.revokeObjectURL(url));
       window.speechSynthesis.cancel();
+      clearHighlight();
     };
   }, [item]);
 
-  // Speech synthesis Read Aloud
-  const toggleNarration = useCallback(() => {
-    if (isNarrating) {
-      window.speechSynthesis.cancel();
+  /* ----------------------------------------------------------- progress */
+
+  /** Cumulative word position, so percentage reflects length rather than chapter count. */
+  const { wordOffsets, totalWords } = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const chapter of chapters) {
+      offsets.push(running);
+      running += chapter.words;
+    }
+    return { wordOffsets: offsets, totalWords: running };
+  }, [chapters]);
+
+  const percentFor = useCallback(
+    (index: number, scrollRatio: number) => {
+      if (totalWords === 0 || !chapters[index]) return 0;
+      const within = chapters[index].words * Math.min(1, Math.max(0, scrollRatio));
+      return Math.min(100, ((wordOffsets[index] + within) / totalWords) * 100);
+    },
+    [chapters, wordOffsets, totalWords]
+  );
+
+  const persistProgress = useThrottledCallback(
+    (index: number, scrollTop: number, ratio: number) => {
+      onProgressUpdate(item.id, index, percentFor(index, ratio), scrollTop);
+    },
+    1500
+  );
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || restoringRef.current || status !== 'ready') return;
+    const scrollable = el.scrollHeight - el.clientHeight;
+    const ratio = scrollable > 0 ? el.scrollTop / scrollable : 1;
+    persistProgress(chapterIndex, el.scrollTop, ratio);
+  }, [chapterIndex, persistProgress, status]);
+
+  /*
+   * Restore the saved scroll offset once the chapter has laid out.
+   *
+   * The saved position is captured into refs rather than read from props: it
+   * only applies to the chapter the reader was last in, and keeping it out of
+   * the dependency list stops a later progress save from re-triggering a scroll.
+   */
+  const savedChapterRef = useRef(initialProgress?.chapterIndex ?? -1);
+  const savedScrollRef = useRef(initialProgress?.chapterScroll ?? 0);
+
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const el = scrollRef.current;
+    if (!el) return;
+
+    restoringRef.current = true;
+    const target = chapterIndex === savedChapterRef.current ? savedScrollRef.current : 0;
+
+    const frame = requestAnimationFrame(() => {
+      el.scrollTop = target;
+      restoringRef.current = false;
+      // Consume the restore so returning to this chapter later starts at the top.
+      savedChapterRef.current = -1;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [chapterIndex, status]);
+
+  /* ---------------------------------------------------------- narration */
+
+  const stopNarration = useCallback(() => {
+    window.speechSynthesis.cancel();
+    clearHighlight();
+    setIsNarrating(false);
+  }, []);
+
+  const startNarration = useCallback(() => {
+    const container = proseRef.current;
+    if (!container) return;
+
+    const map = buildNarrationMap(container);
+    if (!map.text.trim()) return;
+    narrationMapRef.current = map;
+
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(map.text);
+    utterance.rate = narrationRate;
+
+    utterance.onboundary = (event) => {
+      const currentMap = narrationMapRef.current;
+      if (!currentMap) return;
+      const range = highlightSentence(currentMap, event.charIndex);
+      // Keep the spoken sentence in view without yanking the page on every word.
+      const rect = range?.getBoundingClientRect();
+      const host = scrollRef.current;
+      if (rect && host) {
+        const hostRect = host.getBoundingClientRect();
+        if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
+          host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
+        }
+      }
+    };
+
+    utterance.onend = () => {
+      clearHighlight();
       setIsNarrating(false);
-    } else {
-      window.speechSynthesis.cancel();
-      const currentText = chapters[currentChapterIdx]?.text || '';
-      if (!currentText) return;
+    };
+    utterance.onerror = () => {
+      clearHighlight();
+      setIsNarrating(false);
+    };
 
-      const utterance = new SpeechSynthesisUtterance(currentText);
-      utterance.rate = 1.0;
-      utterance.onend = () => setIsNarrating(false);
-      utterance.onerror = () => setIsNarrating(false);
+    setIsNarrating(true);
+    window.speechSynthesis.speak(utterance);
+  }, [narrationRate]);
 
-      setIsNarrating(true);
-      window.speechSynthesis.speak(utterance);
-    }
-  }, [isNarrating, chapters, currentChapterIdx]);
+  const toggleNarration = useCallback(() => {
+    if (isNarrating) stopNarration();
+    else startNarration();
+  }, [isNarrating, startNarration, stopNarration]);
 
-  const handleNextChapter = () => {
-    if (currentChapterIdx < chapters.length - 1) {
-      const next = currentChapterIdx + 1;
-      setCurrentChapterIdx(next);
-      contentContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-      onProgressUpdate(item.id, next + 1, ((next + 1) / chapters.length) * 100);
-    }
-  };
+  /* Narration is bound to one chapter's DOM; moving chapters must end it. */
+  useEffect(() => {
+    stopNarration();
+  }, [chapterIndex, stopNarration]);
 
-  const handlePrevChapter = () => {
-    if (currentChapterIdx > 0) {
-      const prev = currentChapterIdx - 1;
-      setCurrentChapterIdx(prev);
-      contentContainerRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-      onProgressUpdate(item.id, prev + 1, ((prev + 1) / chapters.length) * 100);
-    }
-  };
+  /* ---------------------------------------------------------- navigation */
 
-  const currentChapter = chapters[currentChapterIdx];
-  const progressPercent = chapters.length > 0 ? Math.round(((currentChapterIdx + 1) / chapters.length) * 100) : 0;
+  const goToChapter = useCallback(
+    (index: number) => {
+      if (index < 0 || index >= chapters.length) return;
+      setChapterIndex(index);
+      setIsTocOpen(false);
+      onProgressUpdate(item.id, index, percentFor(index, 0), 0);
+    },
+    [chapters.length, item.id, onProgressUpdate, percentFor]
+  );
 
-  // Reading themes
-  const themeStyles = {
-    dark: 'bg-neutral-950 text-neutral-200 border-white/[0.08]',
-    sepia: 'bg-[#f8f1e3] text-[#3d3226] border-[#3d3226]/10',
-    light: 'bg-[#fafafa] text-[#1c1d1f] border-black/10',
-  };
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === 'INPUT' || target?.isContentEditable) return;
 
-  const themeNavStyles = {
-    dark: 'bg-neutral-900/90 text-neutral-100 border-white/[0.08]',
-    sepia: 'bg-[#f0e7d5]/90 text-[#3d3226] border-[#3d3226]/15',
-    light: 'bg-white/90 text-neutral-900 border-neutral-200',
-  };
+      if (event.key === 'Escape') onClose();
+      else if (event.key === 'ArrowRight' || event.key === 'PageDown') goToChapter(chapterIndex + 1);
+      else if (event.key === 'ArrowLeft' || event.key === 'PageUp') goToChapter(chapterIndex - 1);
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [chapterIndex, goToChapter, onClose]);
+
+  const progressPercent = Math.round(percentFor(chapterIndex, 0));
+
+  /* -------------------------------------------------------------- render */
 
   return (
-    <div className={`fixed inset-0 z-50 flex flex-col h-screen w-screen transition-colors duration-300 ${themeStyles[theme]}`}>
-      {/* Top Navigation Bar: Clear Exit to Library button, Book Title, and Action Controls */}
+    <div
+      className="reader-surface animate-reader-in fixed inset-0 z-50 flex flex-col"
+      data-theme={theme}
+    >
       <header
-        className={`flex items-center justify-between h-12 px-3 border-b select-none backdrop-blur-md z-30 transition-colors ${themeNavStyles[theme]}`}
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        className="acu-drag flex h-12 shrink-0 items-center justify-between gap-2 border-b px-2.5 backdrop-blur-xl"
+        style={{ background: 'var(--reader-chrome)', borderColor: 'var(--reader-rule)' }}
       >
-        {/* Left: Prominent EXIT TO LIBRARY button */}
-        <div
-          className="flex items-center gap-2"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
+        <div className="acu-no-drag flex items-center gap-1.5">
           <button
+            type="button"
             onClick={onClose}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/10 hover:bg-white/20 active:scale-95 border border-white/15 transition-all shadow-xs cursor-pointer group"
-            title="Return to Home Library"
+            className="group flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-[12px] font-medium transition-colors duration-150 hover:bg-black/10 dark:hover:bg-white/10"
+            style={{ color: 'var(--reader-fg)' }}
+            title="Back to library (Esc)"
           >
-            <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
+            <ArrowLeft className="h-3.5 w-3.5 transition-transform duration-200 ease-[var(--ease-out)] group-hover:-translate-x-0.5" />
             <span>Library</span>
           </button>
 
-          <AcuityLogo size={22} />
+          {chapters.length > 0 && (
+            <div className="relative" ref={tocRef}>
+              <button
+                type="button"
+                onClick={() => setIsTocOpen((open) => !open)}
+                className="icon-button"
+                style={{ color: 'var(--reader-muted)' }}
+                aria-haspopup="menu"
+                aria-expanded={isTocOpen}
+                aria-label="Table of contents"
+                title="Contents"
+              >
+                <List className="h-4 w-4" />
+              </button>
+
+              {isTocOpen && (
+                <div
+                  className="menu left-0 top-full mt-1.5 max-h-[60vh] w-72 overflow-y-auto"
+                  style={{ '--menu-origin': 'top left' } as React.CSSProperties}
+                  role="menu"
+                >
+                  {chapters.map((chapter, index) => (
+                    <button
+                      key={chapter.id}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={index === chapterIndex}
+                      className="menu-item"
+                      onClick={() => goToChapter(index)}
+                    >
+                      <span className="line-clamp-2 flex-1">{chapter.title}</span>
+                      <span className="shrink-0 text-[10px] tabular-nums opacity-50">
+                        {formatReadingTime(chapter.words)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Center: Title & Chapter Navigation */}
-        <div className="flex-1 min-w-0 mx-3 text-center">
-          <h2 className="text-xs font-semibold truncate leading-tight" title={item.title}>
+        <div className="pointer-events-none min-w-0 flex-1 text-center">
+          <h1 className="truncate text-[12px] font-semibold" style={{ color: 'var(--reader-fg)' }}>
             {item.title}
-          </h2>
-          <p className="text-[10px] opacity-70 truncate">
-            {currentChapter?.title || `Page ${currentChapterIdx + 1}`}
+          </h1>
+          <p className="truncate text-[10.5px]" style={{ color: 'var(--reader-muted)' }}>
+            {currentChapter?.title ?? item.author}
           </p>
         </div>
 
-        {/* Right: Controls (Listen, Read Aloud, Appearance, Bookmark) */}
+        {/*
+          Reserve the caption-button strip using the Window Controls Overlay
+          variables, falling back to a fixed inset where they are unavailable.
+        */}
         <div
-          className="flex items-center gap-1.5 pr-[140px]"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          className="acu-no-drag flex items-center gap-1"
+          style={{ paddingRight: 'calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px))' }}
         >
-          {/* Companion Audiobook Switch */}
           {item.companionPath && onSwitchToAudio && (
             <button
+              type="button"
               onClick={() => onSwitchToAudio(item.companionPath!)}
-              className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/25 rounded-md transition-all shadow-2xs"
-              title="Switch to Audiobook edition"
+              className="flex items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent-ring)] bg-[var(--accent-muted)] px-2 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors duration-150 hover:bg-[rgba(240,178,50,0.24)]"
+              title="Switch to the audiobook edition"
             >
-              <Headphones className="w-3 h-3" />
+              <Headphones className="h-3 w-3" />
               <span>Listen</span>
             </button>
           )}
 
-          {/* Read Aloud (Speech Synthesis) */}
-          <button
-            onClick={toggleNarration}
-            title={isNarrating ? 'Stop reading aloud' : 'Read aloud with speech synthesis'}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md transition-all ${
-              isNarrating
-                ? 'bg-amber-400 text-neutral-950 font-semibold shadow-xs'
-                : 'hover:bg-white/10 opacity-80 hover:opacity-100'
-            }`}
-          >
-            {isNarrating ? <Square className="w-3 h-3 fill-current" /> : <Play className="w-3 h-3 fill-current" />}
-            <span>{isNarrating ? 'Stop' : 'Read'}</span>
-          </button>
-
-          {/* Appearance Menu Toggle */}
-          <div className="relative">
+          {status === 'ready' && (
             <button
-              onClick={() => setIsAppearanceOpen(!isAppearanceOpen)}
-              title="Typography & Theme settings"
-              className="p-1.5 rounded-md hover:bg-white/10 opacity-80 hover:opacity-100 transition-colors"
+              type="button"
+              onClick={toggleNarration}
+              data-active={isNarrating}
+              className="icon-button"
+              style={isNarrating ? undefined : { color: 'var(--reader-muted)' }}
+              aria-label={isNarrating ? 'Stop reading aloud' : 'Read aloud'}
+              title={isNarrating ? 'Stop reading aloud' : 'Read aloud'}
             >
-              <Type className="w-3.5 h-3.5" />
+              {isNarrating ? (
+                <Square className="h-3.5 w-3.5 fill-current" />
+              ) : (
+                <Play className="h-3.5 w-3.5 fill-current" />
+              )}
+            </button>
+          )}
+
+          <div className="relative" ref={appearanceRef}>
+            <button
+              type="button"
+              onClick={() => setIsAppearanceOpen((open) => !open)}
+              className="icon-button"
+              style={{ color: 'var(--reader-muted)' }}
+              aria-haspopup="menu"
+              aria-expanded={isAppearanceOpen}
+              aria-label="Typography and theme"
+              title="Appearance"
+            >
+              <Type className="h-4 w-4" />
             </button>
 
-            {/* Appearance Dropdown */}
             {isAppearanceOpen && (
               <div
-                className={`absolute right-0 top-full mt-2 w-56 p-3 rounded-xl shadow-2xl border backdrop-blur-xl z-50 space-y-3 ${
-                  theme === 'dark' ? 'bg-neutral-900/95 border-white/10 text-white' : 'bg-white/95 border-neutral-300 text-neutral-900'
-                }`}
+                className="menu right-0 top-full mt-1.5 w-64 space-y-3 p-3"
+                style={{ '--menu-origin': 'top right' } as React.CSSProperties}
               >
-                {/* Theme Selector */}
-                <div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60">
-                    Theme
-                  </span>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <button
-                      onClick={() => setTheme('dark')}
-                      className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 border transition-all ${
-                        theme === 'dark' ? 'bg-neutral-800 border-white/30 text-white' : 'border-transparent opacity-60 hover:opacity-100'
-                      }`}
-                    >
-                      <Moon className="w-3 h-3" />
-                      <span>Dark</span>
-                    </button>
-                    <button
-                      onClick={() => setTheme('sepia')}
-                      className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 border transition-all ${
-                        theme === 'sepia' ? 'bg-[#f0e7d5] text-[#3d3226] border-[#3d3226]/30' : 'border-transparent opacity-60 hover:opacity-100'
-                      }`}
-                    >
-                      <Coffee className="w-3 h-3" />
-                      <span>Sepia</span>
-                    </button>
-                    <button
-                      onClick={() => setTheme('light')}
-                      className={`flex-1 py-1 px-2 rounded-md text-[11px] font-medium flex items-center justify-center gap-1 border transition-all ${
-                        theme === 'light' ? 'bg-neutral-100 text-neutral-900 border-neutral-300' : 'border-transparent opacity-60 hover:opacity-100'
-                      }`}
-                    >
-                      <Sun className="w-3 h-3" />
-                      <span>Light</span>
-                    </button>
+                <Section label="Theme">
+                  <div className="flex gap-1.5">
+                    {THEMES.map(({ key, label, icon: Icon }) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setTheme(key)}
+                        aria-pressed={theme === key}
+                        className={`flex flex-1 items-center justify-center gap-1 rounded-[var(--radius-sm)] border py-1.5 text-[11px] transition-colors duration-150 ${
+                          theme === key
+                            ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                            : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)]'
+                        }`}
+                      >
+                        <Icon className="h-3 w-3" />
+                        {label}
+                      </button>
+                    ))}
                   </div>
-                </div>
+                </Section>
 
-                {/* Font Size Selector */}
-                <div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60">
-                    Text Size
-                  </span>
-                  <div className="flex items-center justify-between gap-2 mt-1">
-                    <button
-                      onClick={() => setFontSize((s) => Math.max(13, s - 1))}
-                      className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs font-semibold"
-                    >
-                      A-
-                    </button>
-                    <span className="text-xs font-medium tabular-nums">{fontSize}px</span>
-                    <button
-                      onClick={() => setFontSize((s) => Math.min(26, s + 1))}
-                      className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs font-semibold"
-                    >
-                      A+
-                    </button>
-                  </div>
-                </div>
+                <Section label="Text size">
+                  <Stepper
+                    value={`${fontSize}px`}
+                    onDecrease={() => setFontSize((s) => Math.max(13, s - 1))}
+                    onIncrease={() => setFontSize((s) => Math.min(30, s + 1))}
+                    decreaseLabel="Smaller text"
+                    increaseLabel="Larger text"
+                  />
+                </Section>
 
-                {/* Font Typeface */}
-                <div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60">
-                    Typeface
-                  </span>
-                  <div className="flex items-center gap-1.5 mt-1">
-                    <button
-                      onClick={() => setFontFamily('serif')}
-                      className={`flex-1 py-1 rounded text-xs font-serif border ${
-                        fontFamily === 'serif' ? 'border-white/30 font-semibold' : 'border-transparent opacity-60'
-                      }`}
-                    >
-                      Serif
-                    </button>
-                    <button
-                      onClick={() => setFontFamily('sans')}
-                      className={`flex-1 py-1 rounded text-xs font-sans border ${
-                        fontFamily === 'sans' ? 'border-white/30 font-semibold' : 'border-transparent opacity-60'
-                      }`}
-                    >
-                      Sans
-                    </button>
+                <Section label="Line spacing">
+                  <Stepper
+                    value={lineHeight.toFixed(2)}
+                    onDecrease={() => setLineHeight((v) => Math.max(1.3, Number((v - 0.08).toFixed(2))))}
+                    onIncrease={() => setLineHeight((v) => Math.min(2.2, Number((v + 0.08).toFixed(2))))}
+                    decreaseLabel="Tighter line spacing"
+                    increaseLabel="Looser line spacing"
+                  />
+                </Section>
+
+                <Section label="Typeface">
+                  <div className="flex gap-1.5">
+                    {(['serif', 'sans'] as const).map((face) => (
+                      <button
+                        key={face}
+                        type="button"
+                        onClick={() => setTypeface(face)}
+                        aria-pressed={typeface === face}
+                        className={`flex-1 rounded-[var(--radius-sm)] border py-1.5 text-[12px] capitalize transition-colors duration-150 ${
+                          face === 'serif' ? 'font-serif' : 'font-sans'
+                        } ${
+                          typeface === face
+                            ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                            : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)]'
+                        }`}
+                      >
+                        {face}
+                      </button>
+                    ))}
                   </div>
-                </div>
+                </Section>
+
+                <Section label="Narration speed">
+                  <Stepper
+                    value={`${narrationRate.toFixed(2)}×`}
+                    onDecrease={() => setNarrationRate((v) => Math.max(0.5, Number((v - 0.25).toFixed(2))))}
+                    onIncrease={() => setNarrationRate((v) => Math.min(2.5, Number((v + 0.25).toFixed(2))))}
+                    decreaseLabel="Slower narration"
+                    increaseLabel="Faster narration"
+                  />
+                </Section>
+
+                {!isHighlightSupported() && (
+                  <p className="text-[10px] leading-snug text-[var(--text-tertiary)]">
+                    Sentence highlighting is unavailable in this runtime; narration still works.
+                  </p>
+                )}
               </div>
             )}
           </div>
 
-          {/* Bookmark Button */}
-          <button
-            onClick={() => onAddBookmark(item.id, currentChapterIdx + 1)}
-            title="Bookmark this position"
-            className="p-1.5 rounded-md hover:bg-white/10 opacity-80 hover:opacity-100 transition-colors"
-          >
-            <Bookmark className="w-3.5 h-3.5" />
-          </button>
+          {status === 'ready' && (
+            <button
+              type="button"
+              onClick={() =>
+                onAddBookmark(item.id, chapterIndex, currentChapter?.text.slice(0, 140) ?? '')
+              }
+              className="icon-button"
+              style={{ color: 'var(--reader-muted)' }}
+              aria-label="Bookmark this chapter"
+              title="Bookmark this chapter"
+            >
+              <Bookmark className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </header>
 
-      {/* Reader Content Body */}
       <main
-        ref={contentContainerRef}
-        className="flex-1 overflow-y-auto px-6 py-10 max-w-2xl mx-auto w-full select-text leading-relaxed transition-all"
-        style={{
-          fontFamily:
-            fontFamily === 'serif'
-              ? "'Newsreader', 'Playfair Display', 'Georgia', serif"
-              : "'Segoe UI Variable Text', -apple-system, sans-serif",
-          fontSize: `${fontSize}px`,
-        }}
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 select-text overflow-y-auto px-6 py-10"
+        style={{ scrollbarGutter: 'stable both-edges' }}
       >
-        {isLoading ? (
-          <div className="h-64 flex flex-col items-center justify-center space-y-3 opacity-60">
-            <div className="w-6 h-6 border-2 border-current border-t-transparent rounded-full animate-spin" />
-            <p className="text-xs">Opening {item.title}...</p>
-          </div>
-        ) : (
-          <article className="space-y-6">
-            <header className="border-b pb-4 mb-6 opacity-80 border-current/15">
-              <h1 className="text-xl font-bold tracking-tight">
-                {currentChapter?.title || item.title}
-              </h1>
-              {item.author && <p className="text-xs mt-1 opacity-70">By {item.author}</p>}
+        {status === 'loading' && <ReaderSkeleton title={item.title} />}
+
+        {status === 'unsupported' && (
+          <ReaderNotice
+            title={`${item.format.toUpperCase()} files aren't supported yet`}
+            body="Acuity's reader currently renders EPUB. This title is in your library and its progress is tracked, but it needs to be opened in another application for now."
+            action={{
+              label: 'Show in folder',
+              onClick: () => void window.electronAPI?.revealInFolder(item.filePath),
+            }}
+          />
+        )}
+
+        {status === 'error' && (
+          <ReaderNotice
+            title="This book couldn't be opened"
+            body={errorMessage}
+            action={{
+              label: 'Show in folder',
+              onClick: () => void window.electronAPI?.revealInFolder(item.filePath),
+            }}
+          />
+        )}
+
+        {status === 'ready' && currentChapter && (
+          <article
+            key={currentChapter.id}
+            className="reader-prose animate-fade-rise"
+            style={{
+              fontSize: `${fontSize}px`,
+              lineHeight,
+              fontFamily:
+                typeface === 'serif'
+                  ? "Newsreader, 'Playfair Display', Georgia, serif"
+                  : "'Segoe UI Variable Text', -apple-system, system-ui, sans-serif",
+            }}
+          >
+            <header className="mb-8 border-b pb-4" style={{ borderColor: 'var(--reader-rule)' }}>
+              <p
+                className="text-[10px] font-semibold uppercase tracking-[0.15em]"
+                style={{ color: 'var(--reader-muted)' }}
+              >
+                Chapter {chapterIndex + 1} of {chapters.length}
+                {currentChapter.words > 0 && ` · ${formatReadingTime(currentChapter.words)}`}
+              </p>
+              <h2 className="mt-1.5 text-[1.5em] font-semibold leading-tight">
+                {currentChapter.title}
+              </h2>
             </header>
 
-            {currentChapter?.text.split('\n\n').map((paragraph, idx) => (
-              <p key={idx} className="leading-relaxed">
-                {paragraph}
-              </p>
-            ))}
+            {/*
+              Chapter markup is sanitised in parseEpub: scripts, styles, remote
+              resources and inline event handlers are stripped, and images are
+              rewritten to blob URLs from inside the archive.
+            */}
+            <div
+              ref={proseRef}
+              data-dropcap={chapterIndex === 0}
+              dangerouslySetInnerHTML={{ __html: currentChapter.html }}
+            />
           </article>
         )}
       </main>
 
-      {/* Bottom Chapter & Reading Progress Footer */}
-      <footer
-        className={`flex items-center justify-between h-10 px-4 border-t select-none backdrop-blur-md z-30 transition-colors ${themeNavStyles[theme]}`}
-      >
-        <button
-          onClick={handlePrevChapter}
-          disabled={currentChapterIdx === 0}
-          className="flex items-center gap-1 text-xs opacity-80 hover:opacity-100 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
+      {status === 'ready' && chapters.length > 0 && (
+        <footer
+          className="flex h-11 shrink-0 items-center justify-between gap-3 border-t px-3 backdrop-blur-xl"
+          style={{ background: 'var(--reader-chrome)', borderColor: 'var(--reader-rule)' }}
         >
-          <ChevronLeft className="w-3.5 h-3.5" />
-          <span>Previous</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => goToChapter(chapterIndex - 1)}
+            disabled={chapterIndex === 0}
+            className="flex items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1 text-[11.5px] transition-opacity duration-150 disabled:opacity-30"
+            style={{ color: 'var(--reader-muted)' }}
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            Previous
+          </button>
 
-        <div className="flex items-center gap-2">
-          <div className="w-24 h-1 bg-current/20 rounded-full overflow-hidden">
+          <div className="flex flex-1 items-center gap-2">
             <div
-              className="h-full bg-amber-400 rounded-full transition-all duration-300"
-              style={{ width: `${progressPercent}%` }}
-            />
+              className="h-[3px] flex-1 overflow-hidden rounded-full"
+              style={{ background: 'var(--reader-rule)' }}
+            >
+              <div
+                className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-300 ease-[var(--ease-out)]"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+            <span
+              className="w-9 shrink-0 text-right text-[10.5px] tabular-nums"
+              style={{ color: 'var(--reader-muted)' }}
+            >
+              {progressPercent}%
+            </span>
           </div>
-          <span className="text-[11px] tabular-nums opacity-75 font-medium">
-            {progressPercent}%
-          </span>
-        </div>
 
-        <button
-          onClick={handleNextChapter}
-          disabled={currentChapterIdx >= chapters.length - 1}
-          className="flex items-center gap-1 text-xs opacity-80 hover:opacity-100 disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-        >
-          <span>Next</span>
-          <ChevronRight className="w-3.5 h-3.5" />
-        </button>
-      </footer>
+          <button
+            type="button"
+            onClick={() => goToChapter(chapterIndex + 1)}
+            disabled={chapterIndex >= chapters.length - 1}
+            className="flex items-center gap-1 rounded-[var(--radius-sm)] px-2 py-1 text-[11.5px] transition-opacity duration-150 disabled:opacity-30"
+            style={{ color: 'var(--reader-muted)' }}
+          >
+            Next
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        </footer>
+      )}
     </div>
   );
 };
+
+/* ------------------------------------------------------------- subviews */
+
+const Section: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div>
+    <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.13em] text-[var(--text-tertiary)]">
+      {label}
+    </span>
+    {children}
+  </div>
+);
+
+const Stepper: React.FC<{
+  value: string;
+  onDecrease: () => void;
+  onIncrease: () => void;
+  decreaseLabel: string;
+  increaseLabel: string;
+}> = ({ value, onDecrease, onIncrease, decreaseLabel, increaseLabel }) => (
+  <div className="flex items-center justify-between gap-2">
+    <button type="button" onClick={onDecrease} className="icon-button h-7 w-7" aria-label={decreaseLabel}>
+      <Minus className="h-3 w-3" />
+    </button>
+    <span className="text-[12px] tabular-nums text-[var(--text-secondary)]">{value}</span>
+    <button type="button" onClick={onIncrease} className="icon-button h-7 w-7" aria-label={increaseLabel}>
+      <Plus className="h-3 w-3" />
+    </button>
+  </div>
+);
+
+/** Skeleton shaped like a page of prose, so the swap to real text is not jarring. */
+const ReaderSkeleton: React.FC<{ title: string }> = ({ title }) => (
+  <div className="reader-prose" aria-busy="true" aria-label={`Opening ${title}`}>
+    <div className="skeleton mb-8 h-6 w-2/3" />
+    {[...Array(9)].map((_, row) => (
+      <div key={row} className="mb-3 space-y-2">
+        <div className="skeleton h-3.5 w-full" />
+        <div className="skeleton h-3.5 w-[96%]" />
+        <div className="skeleton h-3.5" style={{ width: `${62 + ((row * 7) % 30)}%` }} />
+      </div>
+    ))}
+  </div>
+);
+
+const ReaderNotice: React.FC<{
+  title: string;
+  body: string;
+  action?: { label: string; onClick: () => void };
+}> = ({ title, body, action }) => (
+  <div className="mx-auto flex max-w-sm flex-col items-center gap-3 py-20 text-center">
+    <div
+      className="flex h-12 w-12 items-center justify-center rounded-[var(--radius-xl)] border"
+      style={{ borderColor: 'var(--reader-rule)' }}
+    >
+      <FolderOpen className="h-5 w-5" style={{ color: 'var(--reader-muted)' }} />
+    </div>
+    <h2 className="text-[14px] font-semibold">{title}</h2>
+    <p className="text-[12.5px] leading-relaxed" style={{ color: 'var(--reader-muted)' }}>
+      {body}
+    </p>
+    {action && (
+      <button
+        type="button"
+        onClick={action.onClick}
+        className="mt-1 rounded-[var(--radius-md)] border border-[var(--stroke-default)] px-3 py-1.5 text-[12px] font-medium transition-colors duration-150 hover:bg-[var(--surface-raised-hover)]"
+      >
+        {action.label}
+      </button>
+    )}
+  </div>
+);

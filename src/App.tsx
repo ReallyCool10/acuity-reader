@@ -1,293 +1,409 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BookOpen, FolderPlus, SearchX } from 'lucide-react';
 import { TitleBarControls } from './components/TitleBarControls';
-import { SearchBar } from './components/SearchBar';
+import { LibraryToolbar } from './components/LibraryToolbar';
+import { ContinueShelf } from './components/ContinueShelf';
 import { BookCard } from './components/BookCard';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { ReaderView } from './components/ReaderView';
 import { SettingsModal } from './components/SettingsModal';
-import { FolderPlus, BookOpen } from 'lucide-react';
-import type { MediaItem, LibraryState, MediaType } from './types';
+import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
+import type { Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
+
+const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {} };
+
+/** Titles at least this far in — but not finished — qualify for the Continue shelf. */
+const CONTINUE_MIN_PERCENT = 1;
+const CONTINUE_MAX_PERCENT = 98;
+const CONTINUE_LIMIT = 12;
 
 export default function App() {
-  const [library, setLibrary] = useState<LibraryState>({
-    folders: [],
-    items: [],
-    progress: {},
-    bookmarks: {},
-  });
-
+  const [library, setLibrary] = useState<LibraryState>(EMPTY_LIBRARY);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | MediaType>('all');
+  const [sortKey, setSortKey] = usePersistentState<SortKey>('acuity.sortKey', 'recent');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [scanCount, setScanCount] = useState(0);
 
-  // Active reading & audio state
   const [activeAudioItem, setActiveAudioItem] = useState<MediaItem | null>(null);
   const [activeBookItem, setActiveBookItem] = useState<MediaItem | null>(null);
 
-  // Persist library state
-  const persistLibrary = useCallback((nextState: LibraryState) => {
-    setLibrary(nextState);
-    window.electronAPI?.saveLibrary(nextState);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+
+  /*
+   * One write path for the whole library.
+   *
+   * Throttling here plus the debounce in the main process means continuous
+   * playback costs about one disk write per second, rather than one per
+   * `timeupdate` event — each of which re-serialised the entire library.
+   */
+  const saveLibrary = useThrottledCallback((state: LibraryState) => {
+    void window.electronAPI?.saveLibrary(state);
+  }, 1000);
+
+  const updateLibrary = useCallback(
+    (updater: (prev: LibraryState) => LibraryState) => {
+      setLibrary((prev) => {
+        const next = updater(prev);
+        saveLibrary(next);
+        return next;
+      });
+    },
+    [saveLibrary]
+  );
+
+  /* ---------------------------------------------------------- scanning */
+
+  useEffect(() => {
+    const unbind = window.electronAPI?.onScanProgress(({ count }) => setScanCount(count));
+    return () => unbind?.();
   }, []);
 
-  // Automated scanning for a given list of folders
   const scanFolders = useCallback(
     async (foldersToScan: string[]) => {
       if (!window.electronAPI || foldersToScan.length === 0) return;
+
       setIsScanning(true);
+      setScanCount(0);
 
       try {
-        const allScannedItems: MediaItem[] = [];
+        const scanned: MediaItem[] = [];
         for (const folder of foldersToScan) {
-          const items = await window.electronAPI.scanFolder(folder);
-          allScannedItems.push(...items);
+          scanned.push(...(await window.electronAPI.scanFolder(folder)));
         }
 
-        // Deduplicate items by path
-        const map = new Map<string, MediaItem>();
-        for (const item of allScannedItems) {
-          map.set(item.filePath, item);
-        }
+        const deduped = Array.from(new Map(scanned.map((item) => [item.filePath, item])).values());
 
-        const dedupedItems = Array.from(map.values());
-
-        setLibrary((prev) => {
-          const updated = {
-            ...prev,
-            folders: foldersToScan,
-            items: dedupedItems,
-          };
-          window.electronAPI?.saveLibrary(updated);
-          return updated;
-        });
+        updateLibrary((prev) => ({ ...prev, folders: foldersToScan, items: deduped }));
       } catch (err) {
-        console.error('Scan error:', err);
+        console.error('Library scan failed:', err);
       } finally {
         setIsScanning(false);
+        setScanCount(0);
       }
     },
-    []
+    [updateLibrary]
   );
 
-  // Initial load from persistent storage
   useEffect(() => {
     async function init() {
-      if (window.electronAPI) {
-        const saved = await window.electronAPI.loadLibrary();
-        if (saved && Array.isArray(saved.items)) {
-          setLibrary(saved);
-          // If library has folders and items lack covers, refresh in background
-          if (saved.folders && saved.folders.length > 0 && saved.items.some((i: MediaItem) => !i.coverUrl)) {
-            scanFolders(saved.folders);
-          }
-        }
+      const saved = await window.electronAPI?.loadLibrary();
+      if (!saved || !Array.isArray(saved.items)) return;
+
+      setLibrary({ ...EMPTY_LIBRARY, ...saved });
+
+      // Refresh in the background when covers are missing from a previous scan.
+      if (saved.folders?.length && saved.items.some((item) => !item.coverUrl)) {
+        void scanFolders(saved.folders);
       }
     }
-    init();
+    void init();
   }, [scanFolders]);
 
-  // Add a new parent directory
-  const handleAddFolder = async () => {
-    if (!window.electronAPI) return;
-    const selected = await window.electronAPI.pickFolder();
+  /* ----------------------------------------------------------- folders */
+
+  const handleAddFolder = useCallback(async () => {
+    const selected = await window.electronAPI?.pickFolder();
     if (selected && !library.folders.includes(selected)) {
-      const nextFolders = [...library.folders, selected];
-      await scanFolders(nextFolders);
+      await scanFolders([...library.folders, selected]);
     }
-  };
+  }, [library.folders, scanFolders]);
 
-  // Remove a monitored directory
-  const handleRemoveFolder = (folderToRemove: string) => {
-    const nextFolders = library.folders.filter((f) => f !== folderToRemove);
-    const nextItems = library.items.filter((item) => !item.filePath.startsWith(folderToRemove));
-    persistLibrary({
-      ...library,
-      folders: nextFolders,
-      items: nextItems,
-    });
-  };
-
-  // Rescan all monitored folders
-  const handleRescan = () => {
-    scanFolders(library.folders);
-  };
-
-  // Update progress for audio
-  const handleAudioProgressUpdate = (itemId: string, currentTime: number, duration: number) => {
-    const percent = duration > 0 ? (currentTime / duration) * 100 : 0;
-    setLibrary((prev) => {
-      const nextProgress = {
-        ...prev.progress,
-        [itemId]: {
-          id: itemId,
-          currentTime,
-          duration,
-          percent,
-          lastPlayed: Date.now(),
-        },
+  const handleRemoveFolder = useCallback(
+    (folderToRemove: string) => {
+      /*
+       * Match on a path boundary, not a bare prefix: a plain startsWith would
+       * also strip "/Books Archive" when removing "/Books".
+       */
+      const prefix = folderToRemove.replace(/[/\\]+$/, '');
+      const isInside = (filePath: string) => {
+        if (filePath === prefix) return true;
+        const next = filePath.charAt(prefix.length);
+        return filePath.startsWith(prefix) && (next === '/' || next === '\\');
       };
-      const updated = { ...prev, progress: nextProgress };
-      window.electronAPI?.saveLibrary(updated);
-      return updated;
-    });
-  };
 
-  // Update progress for book
-  const handleBookProgressUpdate = (itemId: string, page: number, percent: number) => {
-    setLibrary((prev) => {
-      const nextProgress = {
-        ...prev.progress,
-        [itemId]: {
-          id: itemId,
-          pdfPage: page,
-          percent,
-          lastPlayed: Date.now(),
+      updateLibrary((prev) => ({
+        ...prev,
+        folders: prev.folders.filter((folder) => folder !== folderToRemove),
+        items: prev.items.filter((item) => !isInside(item.filePath)),
+      }));
+    },
+    [updateLibrary]
+  );
+
+  /* ---------------------------------------------------------- progress */
+
+  const handleAudioProgress = useCallback(
+    (itemId: string, currentTime: number, duration: number) => {
+      updateLibrary((prev) => ({
+        ...prev,
+        progress: {
+          ...prev.progress,
+          [itemId]: {
+            id: itemId,
+            currentTime,
+            duration,
+            percent: duration > 0 ? (currentTime / duration) * 100 : 0,
+            lastPlayed: Date.now(),
+          },
         },
-      };
-      const updated = { ...prev, progress: nextProgress };
-      window.electronAPI?.saveLibrary(updated);
-      return updated;
-    });
-  };
+      }));
+    },
+    [updateLibrary]
+  );
 
-  // Bookmarking
-  const handleAddBookmark = (itemId: string, position: number | string) => {
-    const newBookmark = {
-      id: Math.random().toString(36).substring(2, 9),
-      itemId,
-      label: `Bookmark at ${typeof position === 'number' ? Math.round(position) + 's' : position}`,
-      createdAt: Date.now(),
-      position,
+  const handleBookProgress = useCallback(
+    (itemId: string, chapterIndex: number, percent: number, scroll: number) => {
+      updateLibrary((prev) => ({
+        ...prev,
+        progress: {
+          ...prev.progress,
+          [itemId]: {
+            id: itemId,
+            chapterIndex,
+            chapterScroll: scroll,
+            percent,
+            lastPlayed: Date.now(),
+          },
+        },
+      }));
+    },
+    [updateLibrary]
+  );
+
+  const addBookmark = useCallback(
+    (itemId: string, position: number, label: string, excerpt?: string) => {
+      const bookmark: Bookmark = {
+        id: `${itemId}-${Date.now()}`,
+        itemId,
+        label,
+        createdAt: Date.now(),
+        position,
+        excerpt,
+      };
+
+      updateLibrary((prev) => ({
+        ...prev,
+        bookmarks: { ...prev.bookmarks, [itemId]: [bookmark, ...(prev.bookmarks[itemId] ?? [])] },
+      }));
+    },
+    [updateLibrary]
+  );
+
+  /* ------------------------------------------------------------ opening */
+
+  const openItem = useCallback((item: MediaItem) => {
+    if (item.mediaType === 'audio') setActiveAudioItem(item);
+    else setActiveBookItem(item);
+  }, []);
+
+  const findByPath = useCallback(
+    (filePath: string) => library.items.find((item) => item.filePath === filePath),
+    [library.items]
+  );
+
+  /* --------------------------------------------------------- filtering */
+
+  const counts = useMemo(
+    () => ({
+      all: library.items.length,
+      books: library.items.filter((item) => item.mediaType === 'book').length,
+      audio: library.items.filter((item) => item.mediaType === 'audio').length,
+    }),
+    [library.items]
+  );
+
+  const visibleItems = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    const filtered = library.items.filter((item) => {
+      if (activeFilter !== 'all' && item.mediaType !== activeFilter) return false;
+      if (!query) return true;
+      return (
+        item.title.toLowerCase().includes(query) ||
+        item.author.toLowerCase().includes(query) ||
+        item.format.toLowerCase().includes(query)
+      );
+    });
+
+    const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+
+    return filtered.sort((a, b) => {
+      switch (sortKey) {
+        case 'title':
+          return collator.compare(a.title, b.title);
+        case 'author':
+          return collator.compare(a.author, b.author) || collator.compare(a.title, b.title);
+        case 'added':
+          return b.dateAdded - a.dateAdded;
+        case 'recent':
+        default: {
+          // Unplayed titles sort after everything that has been opened.
+          const aPlayed = library.progress[a.id]?.lastPlayed ?? 0;
+          const bPlayed = library.progress[b.id]?.lastPlayed ?? 0;
+          if (aPlayed !== bPlayed) return bPlayed - aPlayed;
+          return collator.compare(a.title, b.title);
+        }
+      }
+    });
+  }, [library.items, library.progress, activeFilter, searchQuery, sortKey]);
+
+  const continueItems = useMemo(() => {
+    if (searchQuery.trim() || activeFilter !== 'all') return [];
+
+    return library.items
+      .filter((item) => {
+        const progress = library.progress[item.id];
+        return (
+          progress &&
+          progress.percent > CONTINUE_MIN_PERCENT &&
+          progress.percent < CONTINUE_MAX_PERCENT
+        );
+      })
+      .sort(
+        (a, b) =>
+          (library.progress[b.id]?.lastPlayed ?? 0) - (library.progress[a.id]?.lastPlayed ?? 0)
+      )
+      .slice(0, CONTINUE_LIMIT);
+  }, [library.items, library.progress, searchQuery, activeFilter]);
+
+  /* --------------------------------------------------------- shortcuts */
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping = target?.tagName === 'INPUT' || target?.isContentEditable;
+
+      // Ctrl/Cmd+F focuses search from anywhere.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+        return;
+      }
+
+      if (isTyping) {
+        if (event.key === 'Escape') (target as HTMLInputElement).blur();
+        return;
+      }
+
+      // Space toggles playback, matching every media player; only when the
+      // reader is closed, where the key means "scroll" instead.
+      if (event.code === 'Space' && activeAudioItem && !activeBookItem) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('acuity:toggle-play'));
+      }
     };
 
-    setLibrary((prev) => {
-      const existing = prev.bookmarks[itemId] || [];
-      const updated = {
-        ...prev,
-        bookmarks: {
-          ...prev.bookmarks,
-          [itemId]: [newBookmark, ...existing],
-        },
-      };
-      window.electronAPI?.saveLibrary(updated);
-      return updated;
-    });
-  };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeAudioItem, activeBookItem]);
 
-  // Filter & Search
-  const filteredItems = useMemo(() => {
-    return library.items.filter((item) => {
-      // Type filter
-      if (activeFilter !== 'all' && item.mediaType !== activeFilter) {
-        return false;
-      }
-      // Query filter
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchTitle = item.title.toLowerCase().includes(q);
-        const matchAuthor = item.author.toLowerCase().includes(q);
-        const matchFormat = item.format.toLowerCase().includes(q);
-        return matchTitle || matchAuthor || matchFormat;
-      }
-      return true;
-    });
-  }, [library.items, activeFilter, searchQuery]);
-
-  const counts = useMemo(() => {
-    const books = library.items.filter((i) => i.mediaType === 'book').length;
-    const audio = library.items.filter((i) => i.mediaType === 'audio').length;
-    return { all: library.items.length, books, audio };
-  }, [library.items]);
+  const hasLibrary = library.items.length > 0;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-black/40 backdrop-blur-3xl text-neutral-100 overflow-hidden font-sans select-none">
-      {/* Windows Media Player style transparent header */}
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-base)] backdrop-blur-3xl">
       <TitleBarControls
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onRescan={handleRescan}
+        onRescan={() => void scanFolders(library.folders)}
         isScanning={isScanning}
+        scanCount={scanCount}
       />
 
-      {/* Integrated Search & Filter Controls */}
-      <SearchBar
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-        activeFilter={activeFilter}
-        onFilterChange={setActiveFilter}
-        counts={counts}
-      />
+      {hasLibrary && (
+        <LibraryToolbar
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+          sortKey={sortKey}
+          onSortChange={setSortKey}
+          counts={counts}
+          searchRef={searchRef}
+        />
+      )}
 
-      {/* Main Apple Bookshelf Area */}
-      <div className="flex-1 overflow-y-auto px-4 pb-6">
-        {filteredItems.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center p-6 space-y-4">
-            <div className="w-14 h-14 rounded-2xl bg-white/[0.05] border border-white/[0.1] flex items-center justify-center text-neutral-400 shadow-md">
-              <BookOpen className="w-7 h-7" />
-            </div>
-
-            <div className="space-y-1.5">
-              <h3 className="text-sm font-semibold text-neutral-200">
-                {library.folders.length === 0 ? 'Welcome to Acuity Reader' : 'No titles found'}
-              </h3>
-              <p className="text-xs text-neutral-400 max-w-[260px] leading-relaxed">
-                {library.folders.length === 0
-                  ? 'Add your audiobooks and e-books folder. Covers and metadata are discovered automatically.'
-                  : 'Try adjusting your search query or filter pills above.'}
-              </p>
-            </div>
-
-            {library.folders.length === 0 && (
-              <button
-                onClick={handleAddFolder}
-                className="flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-white text-neutral-900 rounded-lg hover:bg-neutral-100 active:scale-95 transition-all shadow-md cursor-pointer"
-              >
-                <FolderPlus className="w-4 h-4" />
-                <span>Select Library Folder</span>
-              </button>
-            )}
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-6 pt-2 pb-4">
-            {filteredItems.map((item) => (
-              <BookCard
-                key={item.id}
-                item={item}
-                progress={library.progress[item.id]}
-                isPlaying={activeAudioItem?.id === item.id}
-                onPlayAudio={(audio) => setActiveAudioItem(audio)}
-                onOpenBook={(book) => setActiveBookItem(book)}
-              />
-            ))}
-          </div>
+      <main className="flex-1 overflow-y-auto px-4 pb-6" style={{ scrollbarGutter: 'stable' }}>
+        {!hasLibrary && !isScanning && (
+          <EmptyState
+            icon={<BookOpen className="h-6 w-6" />}
+            title="Welcome to Acuity Reader"
+            body="Point Acuity at the folder holding your books and audiobooks. Covers and metadata are read automatically."
+            action={{ label: 'Choose a folder', onClick: () => void handleAddFolder() }}
+          />
         )}
-      </div>
 
-      {/* Bottom Audio Player Bar */}
+        {!hasLibrary && isScanning && <LibrarySkeleton />}
+
+        {hasLibrary && (
+          <>
+            <ContinueShelf
+              items={continueItems}
+              progress={library.progress}
+              activeAudioId={activeAudioItem?.id}
+              onOpen={openItem}
+            />
+
+            {visibleItems.length === 0 ? (
+              <EmptyState
+                icon={<SearchX className="h-6 w-6" />}
+                title="Nothing matches"
+                body="Try a different search term, or switch the filter back to All."
+              />
+            ) : (
+              <>
+                {continueItems.length > 0 && (
+                  <h2 className="mb-2.5 px-0.5 text-[11px] font-semibold uppercase tracking-[0.13em] text-[var(--text-tertiary)]">
+                    All titles
+                  </h2>
+                )}
+                <div className="library-grid">
+                  {visibleItems.map((item) => (
+                    <BookCard
+                      key={item.id}
+                      item={item}
+                      progress={library.progress[item.id]}
+                      isPlaying={activeAudioItem?.id === item.id}
+                      onOpen={openItem}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </main>
+
       {activeAudioItem && (
         <AudioPlayerBar
+          key={activeAudioItem.id}
           item={activeAudioItem}
-          initialTime={library.progress[activeAudioItem.id]?.currentTime || 0}
+          initialTime={library.progress[activeAudioItem.id]?.currentTime ?? 0}
           onClose={() => setActiveAudioItem(null)}
-          onProgressUpdate={handleAudioProgressUpdate}
-          onAddBookmark={handleAddBookmark}
+          onProgressUpdate={handleAudioProgress}
+          onAddBookmark={(itemId, time) =>
+            addBookmark(itemId, time, `Bookmark at ${Math.round(time / 60)} min`)
+          }
           onSwitchToCompanion={(companionPath) => {
-            const companion = library.items.find((i) => i.filePath === companionPath);
+            const companion = findByPath(companionPath);
             if (companion) setActiveBookItem(companion);
           }}
         />
       )}
 
-      {/* Dedicated Reader View with prominent Return to Library navigation */}
       {activeBookItem && (
         <ReaderView
+          key={activeBookItem.id}
           item={activeBookItem}
           initialProgress={library.progress[activeBookItem.id]}
           onClose={() => setActiveBookItem(null)}
-          onProgressUpdate={handleBookProgressUpdate}
-          onAddBookmark={handleAddBookmark}
+          onProgressUpdate={handleBookProgress}
+          onAddBookmark={(itemId, chapterIndex, excerpt) =>
+            addBookmark(itemId, chapterIndex, `Chapter ${chapterIndex + 1}`, excerpt)
+          }
           onSwitchToAudio={(companionPath) => {
-            const companion = library.items.find((i) => i.filePath === companionPath);
+            const companion = findByPath(companionPath);
             if (companion) {
               setActiveAudioItem(companion);
               setActiveBookItem(null);
@@ -296,19 +412,60 @@ export default function App() {
         />
       )}
 
-      {/* Library Settings Modal */}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         folders={library.folders}
-        onAddFolder={handleAddFolder}
+        onAddFolder={() => void handleAddFolder()}
         onRemoveFolder={handleRemoveFolder}
-        onRescan={handleRescan}
+        onRescan={() => void scanFolders(library.folders)}
         isScanning={isScanning}
-        totalItems={library.items.length}
+        totalItems={counts.all}
         booksCount={counts.books}
         audioCount={counts.audio}
       />
     </div>
   );
 }
+
+/* ------------------------------------------------------------- subviews */
+
+const EmptyState: React.FC<{
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  action?: { label: string; onClick: () => void };
+}> = ({ icon, title, body, action }) => (
+  <div className="animate-fade-rise flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+    <div className="surface-raised flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] text-[var(--text-tertiary)]">
+      {icon}
+    </div>
+    <div className="space-y-1.5">
+      <h2 className="text-[14px] font-semibold text-[var(--text-primary)]">{title}</h2>
+      <p className="max-w-[280px] text-[12px] leading-relaxed text-[var(--text-tertiary)]">{body}</p>
+    </div>
+    {action && (
+      <button
+        type="button"
+        onClick={action.onClick}
+        className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--text-primary)] px-4 py-2 text-[12px] font-semibold text-[var(--text-inverse)] shadow-[var(--shadow-md)] transition-transform duration-150 ease-[var(--ease-out)] hover:brightness-105 active:scale-[0.97]"
+      >
+        <FolderPlus className="h-3.5 w-3.5" />
+        {action.label}
+      </button>
+    )}
+  </div>
+);
+
+/** Placeholder grid shown during the very first scan, so the window is never blank. */
+const LibrarySkeleton: React.FC = () => (
+  <div className="library-grid pt-2" aria-hidden="true">
+    {[...Array(12)].map((_, index) => (
+      <div key={index}>
+        <div className="skeleton aspect-[1/1.5] w-full rounded-[3px_var(--radius-md)_var(--radius-md)_3px]" />
+        <div className="skeleton mt-2.5 h-3 w-4/5" />
+        <div className="skeleton mt-1.5 h-2.5 w-3/5" />
+      </div>
+    ))}
+  </div>
+);

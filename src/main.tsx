@@ -1,9 +1,16 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+// Stylesheet entry point. Without this import Vite emits no CSS bundle at all,
+// and every utility class in the app silently does nothing.
+import './App.css';
+
+const container = document.getElementById('root');
+if (!container) throw new Error('Root element #root is missing from index.html');
+
+ReactDOM.createRoot(container).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>,
+  </React.StrictMode>
 );

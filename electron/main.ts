@@ -1,6 +1,18 @@
-import { app, BrowserWindow, dialog, ipcMain, screen, Tray, Menu, nativeImage } from 'electron';
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  screen,
+  protocol,
+  Tray,
+  Menu,
+  nativeImage,
+  shell,
+} from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
 import * as mm from 'music-metadata';
@@ -9,23 +21,171 @@ import JSZip from 'jszip';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-process.on('uncaughtException', (err) => {
-  try { fs.writeFileSync(path.join(__dirname, '../main_crash.log'), 'Uncaught: ' + err.stack); } catch {}
-});
-process.on('unhandledRejection', (err: any) => {
-  try { fs.writeFileSync(path.join(__dirname, '../main_crash.log'), 'Unhandled: ' + (err?.stack || err)); } catch {}
-});
-
 app.name = 'Acuity Reader';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isPinned = false;
 
-// Create a simple 24x24 RGBA buffer for taskbar thumbnail & tray icons
+/* ------------------------------------------------------------------ logging */
+
+function logError(scope: string, err: unknown) {
+  const detail = err instanceof Error ? err.stack || err.message : String(err);
+  console.error(`[${scope}] ${detail}`);
+  try {
+    fs.appendFileSync(
+      path.join(app.getPath('userData'), 'acuity-main.log'),
+      `[${new Date().toISOString()}] ${scope}: ${detail}\n`
+    );
+  } catch {
+    // Logging must never take the app down.
+  }
+}
+
+process.on('uncaughtException', (err) => logError('uncaughtException', err));
+process.on('unhandledRejection', (err) => logError('unhandledRejection', err));
+
+/* -------------------------------------------------- acuity:// media protocol */
+
+/**
+ * The renderer never touches `file://`. It requests `acuity://media/<encoded path>`
+ * and this process decides whether to serve it.
+ *
+ * That inversion is what lets `webSecurity` stay enabled. The previous build
+ * disabled it so the renderer could load local audio and covers directly, which
+ * also switched off the same-origin policy for every other resource the app loads.
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+    },
+    scheme: 'acuity',
+  },
+]);
+
+/** Directories the renderer is permitted to read from: library roots + our cover cache. */
+const allowedRoots = new Set<string>();
+
+function registerAllowedRoot(dir: string | undefined | null) {
+  if (!dir) return;
+  try {
+    allowedRoots.add(path.resolve(dir));
+  } catch {
+    // Ignore unusable paths.
+  }
+}
+
+/**
+ * True when `target` sits inside one of the allowed roots.
+ *
+ * Compares resolved paths segment-wise via path.relative rather than by string
+ * prefix: a prefix test would let "/books-private" through on the strength of an
+ * allowed "/books".
+ */
+function isAllowedPath(target: string): boolean {
+  const resolved = path.resolve(target);
+  for (const root of allowedRoots) {
+    const rel = path.relative(root, resolved);
+    if (rel === '') return true;
+    if (!rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+  }
+  return false;
+}
+
+const CONTENT_TYPES: Record<string, string> = {
+  '.aac': 'audio/aac',
+  '.epub': 'application/epub+zip',
+  '.flac': 'audio/flac',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.m4a': 'audio/mp4',
+  '.m4b': 'audio/mp4',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.opus': 'audio/opus',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+};
+
+/**
+ * Serve a local file, honouring HTTP range requests.
+ *
+ * Ranges are not optional here: an .m4b audiobook is routinely hundreds of
+ * megabytes, and without 206 support the <audio> element cannot seek — it can
+ * only stream from zero.
+ */
+async function serveFile(request: Request): Promise<Response> {
+  let filePath: string;
+  try {
+    const url = new URL(request.url);
+    filePath = path.normalize(decodeURIComponent(url.pathname.replace(/^\//, '')));
+  } catch {
+    return new Response('Bad request', { status: 400 });
+  }
+
+  if (!filePath || !isAllowedPath(filePath)) {
+    return new Response('Forbidden', { status: 403 });
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) return new Response('Not found', { status: 404 });
+  } catch {
+    return new Response('Not found', { status: 404 });
+  }
+
+  const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+  const rangeHeader = request.headers.get('Range');
+  const rangeMatch = rangeHeader?.match(/bytes=(\d*)-(\d*)/);
+
+  if (rangeMatch) {
+    const start = rangeMatch[1] ? Number(rangeMatch[1]) : 0;
+    const end = rangeMatch[2] ? Number(rangeMatch[2]) : stat.size - 1;
+
+    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= stat.size) {
+      return new Response('Range not satisfiable', {
+        status: 416,
+        headers: { 'Content-Range': `bytes */${stat.size}` },
+      });
+    }
+
+    const clampedEnd = Math.min(end, stat.size - 1);
+    const stream = fs.createReadStream(filePath, { start, end: clampedEnd });
+    return new Response(Readable.toWeb(stream) as ReadableStream, {
+      status: 206,
+      headers: {
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(clampedEnd - start + 1),
+        'Content-Range': `bytes ${start}-${clampedEnd}/${stat.size}`,
+        'Content-Type': contentType,
+      },
+    });
+  }
+
+  const stream = fs.createReadStream(filePath);
+  return new Response(Readable.toWeb(stream) as ReadableStream, {
+    status: 200,
+    headers: {
+      'Accept-Ranges': 'bytes',
+      'Content-Length': String(stat.size),
+      'Content-Type': contentType,
+    },
+  });
+}
+
+/* -------------------------------------------------------------- tray icons */
+
+/** Small procedurally drawn RGBA glyphs for the taskbar thumbnail and tray. */
 function createIcon(type: 'play' | 'pause' | 'skip-back' | 'skip-forward' | 'tray'): Electron.NativeImage {
   const size = 24;
-  const buffer = Buffer.alloc(size * size * 4); // RGBA
+  const buffer = Buffer.alloc(size * size * 4);
 
   const setPixel = (x: number, y: number, r = 240, g = 240, b = 240, a = 255) => {
     if (x < 0 || x >= size || y < 0 || y >= size) return;
@@ -37,35 +197,28 @@ function createIcon(type: 'play' | 'pause' | 'skip-back' | 'skip-forward' | 'tra
   };
 
   if (type === 'play') {
-    // Triangle
     for (let x = 6; x <= 18; x++) {
       const halfHeight = Math.floor((x - 6) * 0.65);
-      for (let y = 12 - halfHeight; y <= 12 + halfHeight; y++) {
-        setPixel(x, y);
-      }
+      for (let y = 12 - halfHeight; y <= 12 + halfHeight; y++) setPixel(x, y);
     }
   } else if (type === 'pause') {
-    // Two vertical bars
     for (let y = 6; y <= 18; y++) {
       for (let x = 7; x <= 10; x++) setPixel(x, y);
       for (let x = 14; x <= 17; x++) setPixel(x, y);
     }
   } else if (type === 'skip-back') {
-    // Left arrow + bar
     for (let y = 6; y <= 18; y++) setPixel(6, y);
     for (let x = 8; x <= 18; x++) {
       const h = Math.floor((18 - x) * 0.65);
       for (let y = 12 - h; y <= 12 + h; y++) setPixel(x, y);
     }
   } else if (type === 'skip-forward') {
-    // Right arrow + bar
     for (let y = 6; y <= 18; y++) setPixel(18, y);
     for (let x = 6; x <= 16; x++) {
       const h = Math.floor((x - 6) * 0.65);
       for (let y = 12 - h; y <= 12 + h; y++) setPixel(x, y);
     }
   } else {
-    // Minimalist Acuity "A" logo for Tray
     for (let y = 5; y <= 19; y++) {
       const w = Math.floor((y - 5) * 0.55);
       setPixel(12 - w, y, 255, 255, 255);
@@ -83,100 +236,99 @@ function updateThumbarButtons(isPlaying: boolean) {
   try {
     mainWindow.setThumbarButtons([
       {
-        tooltip: 'Skip 15s Back',
+        click: () => mainWindow?.webContents.send('player:command', 'skip-back'),
         icon: createIcon('skip-back'),
-        click() {
-          mainWindow?.webContents.send('player:command', 'skip-back');
-        },
+        tooltip: 'Back 15 seconds',
       },
       {
-        tooltip: isPlaying ? 'Pause' : 'Play',
+        click: () => mainWindow?.webContents.send('player:command', 'toggle-play'),
         icon: createIcon(isPlaying ? 'pause' : 'play'),
-        click() {
-          mainWindow?.webContents.send('player:command', 'toggle-play');
-        },
+        tooltip: isPlaying ? 'Pause' : 'Play',
       },
       {
-        tooltip: 'Skip 15s Forward',
+        click: () => mainWindow?.webContents.send('player:command', 'skip-forward'),
         icon: createIcon('skip-forward'),
-        click() {
-          mainWindow?.webContents.send('player:command', 'skip-forward');
-        },
+        tooltip: 'Forward 15 seconds',
       },
     ]);
   } catch (err) {
-    console.error('Error updating taskbar thumbnail buttons:', err);
+    logError('thumbar', err);
   }
 }
+
+/* ------------------------------------------------------------------ window */
 
 function createMainWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
   const { x: workX, y: workY } = primaryDisplay.workArea;
 
-  // Window default: 1/3 screen width, full screen height, docked to the right edge
   const winWidth = Math.max(420, Math.round(screenWidth / 3));
-  const winHeight = screenHeight;
-  const winX = workX + screenWidth - winWidth;
-  const winY = workY;
-
-  function logStep(msg: string) {
-    try { fs.appendFileSync(path.join(__dirname, '../main_steps.log'), `[${new Date().toISOString()}] ${msg}\n`); } catch {}
-  }
-
-  logStep(`Creating BrowserWindow at x=${winX}, y=${winY}, size=${winWidth}x${winHeight}`);
 
   mainWindow = new BrowserWindow({
-    x: winX,
-    y: winY,
+    x: workX + screenWidth - winWidth,
+    y: workY,
     width: winWidth,
-    height: winHeight,
+    height: screenHeight,
     minWidth: 380,
     minHeight: 520,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#00000000', // Transparent header matching Windows Media Player
-      symbolColor: '#e2e8f0', // Clean Fluent symbol contrast
+      color: '#00000000',
+      symbolColor: '#e2e8f0',
       height: 40,
     },
     icon: path.join(__dirname, '../resources/icon.ico'),
-    backgroundMaterial: 'mica', // Native Windows 11 Mica material
+    backgroundMaterial: 'mica',
     transparent: true,
-    show: true,
-    alwaysOnTop: false, // Default unpinned so it docks gracefully
+    show: false,
+    alwaysOnTop: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      webSecurity: false, // Allows streaming local file:// audio and book assets
+      // Local media is served through the acuity:// handler above, so the
+      // same-origin policy can stay switched on.
+      webSecurity: true,
     },
   });
 
-  mainWindow.show();
-  mainWindow.focus();
-
-  mainWindow.webContents.on('did-finish-load', () => {
-    logStep('Renderer did-finish-load event fired');
-    try { updateThumbarButtons(false); } catch (e: any) { logStep('updateThumbarButtons err: ' + e.message); }
+  // Painting before first frame causes a white flash against the Mica backdrop.
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+    updateThumbarButtons(false);
   });
 
-  mainWindow.webContents.on('did-fail-load', (_, code, desc) => {
-    logStep(`did-fail-load: code=${code}, desc=${desc}`);
+  mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
+    logError('did-fail-load', `${code} ${desc}`);
+  });
+
+  // Keep navigation inside the app; open real links in the user's browser.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
-    logStep('Loading VITE_DEV_SERVER_URL: ' + process.env.VITE_DEV_SERVER_URL);
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
   } else {
-    const indexPath = path.join(__dirname, '../dist/index.html');
-    logStep('Loading file: ' + indexPath);
-    mainWindow.loadFile(indexPath);
+    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
   mainWindow.on('closed', () => {
-    logStep('mainWindow closed event fired');
     mainWindow = null;
   });
+}
+
+function toggleWindow() {
+  if (!mainWindow) {
+    createMainWindow();
+  } else if (mainWindow.isVisible()) {
+    mainWindow.hide();
+  } else {
+    mainWindow.show();
+    mainWindow.focus();
+  }
 }
 
 function createTray() {
@@ -186,89 +338,51 @@ function createTray() {
     tray = new Tray(icon);
     tray.setToolTip('Acuity Reader');
 
-    const contextMenu = Menu.buildFromTemplate([
-      {
-        label: 'Acuity Reader',
-        enabled: false,
-      },
-      { type: 'separator' },
-      {
-        label: 'Show / Hide',
-        click() {
-          if (!mainWindow) {
-            createMainWindow();
-          } else if (mainWindow.isVisible()) {
-            mainWindow.hide();
-          } else {
-            mainWindow.show();
-            mainWindow.focus();
-          }
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Acuity Reader', enabled: false },
+        { type: 'separator' },
+        { label: 'Show / Hide', click: toggleWindow },
+        {
+          label: 'Play / Pause',
+          click: () => mainWindow?.webContents.send('player:command', 'toggle-play'),
         },
-      },
-      {
-        label: 'Play / Pause',
-        click() {
-          mainWindow?.webContents.send('player:command', 'toggle-play');
+        {
+          label: 'Back 15 seconds',
+          click: () => mainWindow?.webContents.send('player:command', 'skip-back'),
         },
-      },
-      {
-        label: 'Skip 15s Back',
-        click() {
-          mainWindow?.webContents.send('player:command', 'skip-back');
+        {
+          label: 'Forward 15 seconds',
+          click: () => mainWindow?.webContents.send('player:command', 'skip-forward'),
         },
-      },
-      {
-        label: 'Skip 15s Forward',
-        click() {
-          mainWindow?.webContents.send('player:command', 'skip-forward');
+        { type: 'separator' },
+        {
+          label: 'Always on Top',
+          type: 'checkbox',
+          checked: isPinned,
+          click: (menuItem) => {
+            isPinned = menuItem.checked;
+            mainWindow?.setAlwaysOnTop(isPinned);
+            mainWindow?.webContents.send('window:pinned-changed', isPinned);
+          },
         },
-      },
-      { type: 'separator' },
-      {
-        label: 'Always on Top',
-        type: 'checkbox',
-        checked: isPinned,
-        click(menuItem) {
-          isPinned = menuItem.checked;
-          mainWindow?.setAlwaysOnTop(isPinned);
-          mainWindow?.webContents.send('window:pinned-changed', isPinned);
-        },
-      },
-      { type: 'separator' },
-      {
-        label: 'Quit Acuity',
-        click() {
-          app.quit();
-        },
-      },
-    ]);
+        { type: 'separator' },
+        { label: 'Quit Acuity', click: () => app.quit() },
+      ])
+    );
 
-    tray.setContextMenu(contextMenu);
-    tray.on('click', () => {
-      if (!mainWindow) {
-        createMainWindow();
-      } else if (mainWindow.isVisible()) {
-        mainWindow.hide();
-      } else {
-        mainWindow.show();
-        mainWindow.focus();
-      }
-    });
+    tray.on('click', toggleWindow);
   } catch (err) {
-    console.error('Tray initialization error:', err);
+    logError('tray', err);
   }
 }
 
-// IPC Handlers
+/* ------------------------------------------------------------ window IPC */
 
-// Window Controls
 ipcMain.handle('window:minimize', () => mainWindow?.minimize());
 ipcMain.handle('window:maximize', () => {
-  if (mainWindow?.isMaximized()) {
-    mainWindow.unmaximize();
-  } else {
-    mainWindow?.maximize();
-  }
+  if (mainWindow?.isMaximized()) mainWindow.unmaximize();
+  else mainWindow?.maximize();
 });
 ipcMain.handle('window:close', () => mainWindow?.close());
 ipcMain.handle('window:togglePin', () => {
@@ -279,31 +393,43 @@ ipcMain.handle('window:togglePin', () => {
 });
 ipcMain.handle('window:isPinned', () => isPinned);
 
-// Taskbar Thumbnails
-ipcMain.on('thumbar:update', (_, { isPlaying }: { isPlaying: boolean }) => {
+ipcMain.on('thumbar:update', (_event, { isPlaying }: { isPlaying: boolean }) => {
   updateThumbarButtons(isPlaying);
 });
 
-// File Dialog
 ipcMain.handle('dialog:pickFolder', async () => {
   if (!mainWindow) return null;
   const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Select Books & Audiobooks Folder',
+    title: 'Select your books and audiobooks folder',
     properties: ['openDirectory'],
   });
   return result.canceled ? null : result.filePaths[0];
 });
 
-// Automated Scanner & Cover Extraction
+ipcMain.handle('shell:revealInFolder', (_event, filePath: string) => {
+  if (isAllowedPath(filePath)) shell.showItemInFolder(path.resolve(filePath));
+});
+
+/* ---------------------------------------------------------------- scanning */
+
 const AUDIO_EXTS = new Set(['.m4b', '.mp3', '.m4a', '.aac', '.flac', '.opus', '.ogg']);
 const BOOK_EXTS = new Set(['.epub', '.pdf']);
+const SKIP_DIRS = new Set(['node_modules', '$RECYCLE.BIN', 'System Volume Information']);
 
 function getCoversDir(): string {
   const dir = path.join(app.getPath('userData'), 'covers');
   if (!fs.existsSync(dir)) {
-    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch (err) {
+      logError('covers-dir', err);
+    }
   }
   return dir;
+}
+
+function cacheKeyFor(filePath: string): string {
+  return crypto.createHash('md5').update(filePath).digest('hex');
 }
 
 async function findOrExtractCover(
@@ -316,157 +442,213 @@ async function findOrExtractCover(
     const baseName = path.parse(fileName).name;
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
 
-    // 1. Sibling image matching book title
     for (const imgExt of imageExtensions) {
       const candidate = path.join(dirPath, baseName + imgExt);
-      if (fs.existsSync(candidate)) {
-        return 'file:///' + candidate.replace(/\\/g, '/');
+      if (fs.existsSync(candidate)) return candidate;
+    }
+
+    for (const name of ['cover', 'folder', 'front', 'albumart']) {
+      for (const imgExt of imageExtensions) {
+        const candidate = path.join(dirPath, name + imgExt);
+        if (fs.existsSync(candidate)) return candidate;
       }
     }
 
-    // 2. Folder images: cover.jpg, folder.jpg, front.jpg, albumart.jpg
-    const folderImageNames = [
-      'cover.jpg', 'cover.jpeg', 'cover.png',
-      'folder.jpg', 'folder.jpeg', 'folder.png',
-      'front.jpg', 'front.jpeg', 'front.png',
-      'albumart.jpg', 'albumart.png'
-    ];
-    for (const name of folderImageNames) {
-      const candidate = path.join(dirPath, name);
-      if (fs.existsSync(candidate)) {
-        return 'file:///' + candidate.replace(/\\/g, '/');
-      }
-    }
+    const cachedCoverPath = path.join(getCoversDir(), `${cacheKeyFor(filePath)}.jpg`);
+    if (fs.existsSync(cachedCoverPath)) return cachedCoverPath;
 
-    const coversDir = getCoversDir();
-
-    // 3. Audio files: Extract embedded picture (ID3 APIC / MP4 covr)
     if (mediaType === 'audio') {
-      const hash = crypto.createHash('md5').update(filePath).digest('hex');
-      const cachedCoverPath = path.join(coversDir, `${hash}.jpg`);
-      if (fs.existsSync(cachedCoverPath)) {
-        return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
-      }
-
       try {
         const metadata = await mm.parseFile(filePath, { skipPostHeaders: true });
         const picture = metadata.common?.picture?.[0];
-        if (picture && picture.data && picture.data.length > 0) {
+        if (picture?.data?.length) {
           await fs.promises.writeFile(cachedCoverPath, picture.data);
-          return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
+          return cachedCoverPath;
         }
-      } catch {}
+      } catch {
+        // Unreadable tags are common; fall through to the procedural jacket.
+      }
     }
 
-    // 4. EPUB files: Extract cover from ZIP archive
-    const ext = path.extname(fileName).toLowerCase();
-    if (ext === '.epub') {
-      const hash = crypto.createHash('md5').update(filePath).digest('hex');
-      const cachedCoverPath = path.join(coversDir, `${hash}.jpg`);
-      if (fs.existsSync(cachedCoverPath)) {
-        return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
-      }
-
+    if (path.extname(fileName).toLowerCase() === '.epub') {
       try {
-        const fileData = await fs.promises.readFile(filePath);
-        const zip = await JSZip.loadAsync(fileData);
-        let coverEntry = Object.values(zip.files).find(
-          (f) => !f.dir && /cover.*\.(jpe?g|png|webp)$/i.test(f.name)
-        );
-        if (!coverEntry) {
-          coverEntry = Object.values(zip.files).find(
-            (f) => !f.dir && /\.(jpe?g|png|webp)$/i.test(f.name)
-          );
+        const zip = await JSZip.loadAsync(await fs.promises.readFile(filePath));
+        const entry =
+          Object.values(zip.files).find((f) => !f.dir && /cover.*\.(jpe?g|png|webp)$/i.test(f.name)) ||
+          Object.values(zip.files).find((f) => !f.dir && /\.(jpe?g|png|webp)$/i.test(f.name));
+        if (entry) {
+          await fs.promises.writeFile(cachedCoverPath, await entry.async('nodebuffer'));
+          return cachedCoverPath;
         }
-        if (coverEntry) {
-          const imgBuffer = await coverEntry.async('nodebuffer');
-          await fs.promises.writeFile(cachedCoverPath, imgBuffer);
-          return 'file:///' + cachedCoverPath.replace(/\\/g, '/');
-        }
-      } catch {}
+      } catch {
+        // Malformed archive; the card falls back to a generated jacket.
+      }
     }
   } catch (err) {
-    console.error('Cover extraction error:', err);
+    logError('cover', err);
   }
   return undefined;
 }
 
+/**
+ * Read real title/author from an EPUB's package document.
+ *
+ * Filenames are a poor source of metadata, and guessing "Author - Title" from
+ * them mislabels anything that does not follow that convention.
+ */
+async function readEpubMetadata(filePath: string): Promise<{ title?: string; author?: string }> {
+  try {
+    const zip = await JSZip.loadAsync(await fs.promises.readFile(filePath));
+    const containerFile = zip.file('META-INF/container.xml');
+    if (!containerFile) return {};
+
+    const containerXml = await containerFile.async('text');
+    const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
+    if (!opfPath) return {};
+
+    const opfFile = zip.file(opfPath);
+    if (!opfFile) return {};
+
+    const opf = await opfFile.async('text');
+    const pick = (field: string) =>
+      opf
+        .match(new RegExp(`<(?:dc:)?${field}[^>]*>([\\s\\S]*?)</(?:dc:)?${field}>`, 'i'))?.[1]
+        ?.replace(/<[^>]+>/g, '')
+        .trim();
+
+    return { title: pick('title'), author: pick('creator') };
+  } catch {
+    return {};
+  }
+}
+
+/** Strip leading track numbers and split a conventional "Author - Title" filename. */
 function cleanTitle(filename: string): { title: string; author: string } {
   const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.')) || filename;
-  // Clean track numbers like "01 - Title", "01. Title"
   const cleaned = nameWithoutExt.replace(/^(\d+[\s._-]+)+/i, '').trim();
 
-  // Check if "Author - Title" or "Title (Author)" format
   const dashMatch = cleaned.match(/^([^-]+)\s*-\s*(.+)$/);
-  if (dashMatch) {
-    return { author: dashMatch[1].trim(), title: dashMatch[2].trim() };
-  }
+  if (dashMatch) return { author: dashMatch[1].trim(), title: dashMatch[2].trim() };
 
   const parenMatch = cleaned.match(/^([^(]+)\s*\(([^)]+)\)$/);
-  if (parenMatch) {
-    return { title: parenMatch[1].trim(), author: parenMatch[2].trim() };
-  }
+  if (parenMatch) return { title: parenMatch[1].trim(), author: parenMatch[2].trim() };
 
   return { title: cleaned, author: '' };
 }
 
-async function scanRecursive(dirPath: string, items: any[]): Promise<void> {
+interface ScannedItem {
+  id: string;
+  title: string;
+  author: string;
+  filePath: string;
+  mediaType: 'audio' | 'book';
+  format: string;
+  fileSize: number;
+  dateAdded: number;
+  dirName: string;
+  durationSeconds?: number;
+  companionPath?: string;
+  companionType?: string;
+  coverUrl?: string;
+}
+
+async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: (count: number) => void) {
+  let entries: fs.Dirent[];
   try {
-    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dirPath, entry.name);
-
-      if (entry.isDirectory()) {
-        // Skip hidden/system folders
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-        await scanRecursive(fullPath, items);
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
-        let mediaType: 'audio' | 'book' | null = null;
-
-        if (AUDIO_EXTS.has(ext)) mediaType = 'audio';
-        else if (BOOK_EXTS.has(ext)) mediaType = 'book';
-
-        if (mediaType) {
-          const stats = await fs.promises.stat(fullPath);
-          const parentDirName = path.basename(dirPath);
-          const { title, author } = cleanTitle(entry.name);
-          const coverUrl = await findOrExtractCover(fullPath, mediaType, dirPath, entry.name);
-
-          items.push({
-            id: Buffer.from(fullPath).toString('base64'),
-            title: title || entry.name,
-            author: author || (parentDirName !== path.basename(path.dirname(fullPath)) ? parentDirName : 'Unknown'),
-            filePath: fullPath,
-            mediaType,
-            format: ext.replace('.', ''),
-            fileSize: stats.size,
-            dateAdded: stats.mtimeMs,
-            dirName: parentDirName,
-            coverUrl,
-          });
-        }
-      }
-    }
+    entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
   } catch (err) {
-    console.error(`Error reading directory ${dirPath}:`, err);
+    logError('scan-readdir', err);
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+
+    if (entry.isDirectory()) {
+      if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue;
+      await scanRecursive(fullPath, items, onProgress);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+
+    const ext = path.extname(entry.name).toLowerCase();
+    const mediaType = AUDIO_EXTS.has(ext) ? 'audio' : BOOK_EXTS.has(ext) ? 'book' : null;
+    if (!mediaType) continue;
+
+    try {
+      const stats = await fs.promises.stat(fullPath);
+      const parentDirName = path.basename(dirPath);
+      const fromName = cleanTitle(entry.name);
+
+      let title = fromName.title || entry.name;
+      let author = fromName.author;
+      let durationSeconds: number | undefined;
+
+      // Embedded metadata beats filename guessing wherever it exists.
+      if (mediaType === 'audio') {
+        try {
+          const meta = await mm.parseFile(fullPath, { skipPostHeaders: true, duration: true });
+          if (meta.common?.title) title = meta.common.title;
+          if (meta.common?.artist || meta.common?.albumartist) {
+            author = meta.common.albumartist || meta.common.artist || author;
+          }
+          if (meta.format?.duration) durationSeconds = meta.format.duration;
+        } catch {
+          // Keep the filename-derived values.
+        }
+      } else if (ext === '.epub') {
+        const meta = await readEpubMetadata(fullPath);
+        if (meta.title) title = meta.title;
+        if (meta.author) author = meta.author;
+      }
+
+      items.push({
+        id: Buffer.from(fullPath).toString('base64'),
+        title,
+        author: author || parentDirName || 'Unknown',
+        filePath: fullPath,
+        mediaType,
+        format: ext.replace('.', ''),
+        fileSize: stats.size,
+        dateAdded: stats.mtimeMs,
+        dirName: parentDirName,
+        durationSeconds,
+        coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name),
+      });
+
+      onProgress(items.length);
+    } catch (err) {
+      logError('scan-file', err);
+    }
   }
 }
 
-ipcMain.handle('scanner:scanFolder', async (_, folderPath: string) => {
-  const items: any[] = [];
-  await scanRecursive(folderPath, items);
+ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
+  registerAllowedRoot(folderPath);
+  registerAllowedRoot(getCoversDir());
 
-  // Companion linking: Group by directory or normalized title
-  const titleMap = new Map<string, any[]>();
+  const items: ScannedItem[] = [];
+  let lastSent = 0;
+
+  await scanRecursive(folderPath, items, (count) => {
+    // Throttle progress so a large library does not flood the IPC channel.
+    const now = Date.now();
+    if (now - lastSent > 120) {
+      lastSent = now;
+      event.sender.send('scanner:progress', { count, folder: folderPath });
+    }
+  });
+
+  // Pair audio and text editions that normalise to the same title.
+  const byTitle = new Map<string, ScannedItem[]>();
   for (const item of items) {
     const key = (item.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!titleMap.has(key)) titleMap.set(key, []);
-    titleMap.get(key)!.push(item);
+    if (!key) continue;
+    if (!byTitle.has(key)) byTitle.set(key, []);
+    byTitle.get(key)!.push(item);
   }
 
-  for (const group of titleMap.values()) {
+  for (const group of byTitle.values()) {
     const audioItem = group.find((i) => i.mediaType === 'audio');
     const bookItem = group.find((i) => i.mediaType === 'book');
     if (audioItem && bookItem) {
@@ -480,67 +662,128 @@ ipcMain.handle('scanner:scanFolder', async (_, folderPath: string) => {
   return items;
 });
 
-// Persistent Storage
+/* ----------------------------------------------------------------- storage */
+
 function getStorageFilePath() {
   return path.join(app.getPath('userData'), 'acuity_library.json');
+}
+
+let pendingWrite: unknown = null;
+let writeTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Write via a temp file then rename.
+ *
+ * Renaming is atomic, so a crash mid-write cannot leave a truncated JSON file
+ * behind — which would otherwise lose the user's entire library and progress.
+ */
+async function writeStoreAtomically(data: unknown) {
+  const target = getStorageFilePath();
+  const temp = `${target}.${process.pid}.tmp`;
+  await fs.promises.writeFile(temp, JSON.stringify(data), 'utf8');
+  await fs.promises.rename(temp, target);
+}
+
+async function flushStore() {
+  if (writeTimer) {
+    clearTimeout(writeTimer);
+    writeTimer = null;
+  }
+  if (pendingWrite === null) return;
+
+  const data = pendingWrite;
+  pendingWrite = null;
+  try {
+    await writeStoreAtomically(data);
+  } catch (err) {
+    logError('storage-flush', err);
+  }
 }
 
 ipcMain.handle('storage:load', async () => {
   try {
     const filePath = getStorageFilePath();
     if (fs.existsSync(filePath)) {
-      const data = await fs.promises.readFile(filePath, 'utf8');
-      return JSON.parse(data);
+      const parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
+      for (const folder of parsed?.folders ?? []) registerAllowedRoot(folder);
+      registerAllowedRoot(getCoversDir());
+      return parsed;
     }
   } catch (err) {
-    console.error('Error loading library data:', err);
+    logError('storage-load', err);
   }
+  registerAllowedRoot(getCoversDir());
   return { folders: [], items: [], progress: {}, bookmarks: {} };
 });
 
-ipcMain.handle('storage:save', async (_, data: any) => {
-  try {
-    const filePath = getStorageFilePath();
-    await fs.promises.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
-    return true;
-  } catch (err) {
-    console.error('Error saving library data:', err);
-    return false;
+/**
+ * Coalesce saves.
+ *
+ * Playback progress updates land continuously while audio plays; debouncing
+ * means steady listening costs one write per second instead of one per
+ * `timeupdate` event, each of which serialises the whole library.
+ */
+ipcMain.handle('storage:save', async (_event, data: { folders?: string[] }) => {
+  for (const folder of data?.folders ?? []) registerAllowedRoot(folder);
+
+  pendingWrite = data;
+  if (!writeTimer) {
+    writeTimer = setTimeout(() => {
+      writeTimer = null;
+      void flushStore();
+    }, 1000);
   }
+  return true;
 });
 
-// Read local file as Base64 (for PDF/EPUB rendering)
-ipcMain.handle('file:readBase64', async (_, filePath: string) => {
+/** Raw bytes for in-renderer EPUB parsing. Gated by the same allowlist as the protocol. */
+ipcMain.handle('file:readBytes', async (_event, filePath: string) => {
+  if (!isAllowedPath(filePath)) {
+    logError('file-read', `Blocked read outside library roots: ${filePath}`);
+    return null;
+  }
   try {
-    const buffer = await fs.promises.readFile(filePath);
-    return buffer.toString('base64');
+    const buffer = await fs.promises.readFile(path.resolve(filePath));
+    return new Uint8Array(buffer);
   } catch (err) {
-    console.error(`Error reading file ${filePath}:`, err);
+    logError('file-read', err);
     return null;
   }
 });
 
-function initApp() {
-  try {
+/* -------------------------------------------------------------- lifecycle */
+
+// A second instance would fight over the tray icon and the library file.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(() => {
+    protocol.handle('acuity', serveFile);
+    registerAllowedRoot(getCoversDir());
     createMainWindow();
     createTray();
-  } catch (err: any) {
-    try { fs.writeFileSync(path.join(__dirname, '../startup_err.log'), 'Init Error: ' + err.stack); } catch {}
-  }
-}
-
-if (app.isReady()) {
-  initApp();
-} else {
-  app.whenReady().then(initApp);
+  });
 }
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
 });
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
+// Any debounced save must reach disk before the process exits.
+app.on('before-quit', (event) => {
+  if (pendingWrite !== null) {
+    event.preventDefault();
+    void flushStore().finally(() => app.exit(0));
   }
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
 });

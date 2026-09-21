@@ -1,0 +1,728 @@
+/*
+ * Acuity design tokens.
+ *
+ * Two references are being blended deliberately:
+ *   - Apple Books for the library — generous gutters, physical covers, editorial
+ *     serif display type, warm neutrals.
+ *   - Windows 11 Media Player for the chrome — Mica-friendly translucency, a
+ *     persistent bottom transport, Fluent easing and depth.
+ *
+ * Everything below is a token. Components reference these rather than hardcoding,
+ * so density and motion can be retuned in one place.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces. Kept translucent so the Windows Mica backdrop reads through. */
+  --surface-base: rgba(12, 12, 14, 0.52);
+  --surface-raised: rgba(255, 255, 255, 0.055);
+  --surface-raised-hover: rgba(255, 255, 255, 0.09);
+  --surface-raised-active: rgba(255, 255, 255, 0.13);
+  --surface-overlay: rgba(18, 18, 21, 0.92);
+  --surface-sunken: rgba(0, 0, 0, 0.28);
+
+  --stroke-subtle: rgba(255, 255, 255, 0.07);
+  --stroke-default: rgba(255, 255, 255, 0.12);
+  --stroke-strong: rgba(255, 255, 255, 0.22);
+
+  /* Text. Four steps is enough; more invites inconsistency. */
+  --text-primary: #f4f4f6;
+  --text-secondary: rgba(244, 244, 246, 0.72);
+  --text-tertiary: rgba(244, 244, 246, 0.48);
+  --text-inverse: #14141a;
+
+  /* Accent. Amber reads as "paper and lamplight" against the dark chrome. */
+  --accent: #f0b232;
+  --accent-hover: #f6c454;
+  --accent-muted: rgba(240, 178, 50, 0.16);
+  --accent-ring: rgba(240, 178, 50, 0.42);
+  --accent-read: #4ade80;
+
+  /* Radii — Fluent's scale, slightly softened for the Apple Books feel. */
+  --radius-sm: 4px;
+  --radius-md: 7px;
+  --radius-lg: 11px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* Elevation. Book covers get their own shelf shadow further down. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --shadow-md: 0 4px 12px -2px rgba(0, 0, 0, 0.44);
+  --shadow-lg: 0 14px 34px -8px rgba(0, 0, 0, 0.62);
+  --shadow-xl: 0 26px 60px -12px rgba(0, 0, 0, 0.72);
+
+  /*
+   * Motion. A single decelerating curve used everywhere is the main reason an
+   * interface reads as "smooth" — mixed easings are what make it feel unsettled.
+   * --ease-out is Fluent's standard decelerate; --ease-spring adds a slight
+   * overshoot reserved for elements that enter the view.
+   */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  --duration-instant: 90ms;
+  --duration-fast: 150ms;
+  --duration-normal: 240ms;
+  --duration-slow: 380ms;
+
+  /* Layout */
+  --titlebar-height: 40px;
+  --transport-height: 84px;
+  --cover-min: 132px;
+  --gutter: 18px;
+}
+
+/*
+ * Respect the OS motion setting. Durations collapse rather than animations being
+ * removed, so state changes still land in the right place without movement.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-instant: 1ms;
+    --duration-fast: 1ms;
+    --duration-normal: 1ms;
+    --duration-slow: 1ms;
+    --ease-spring: linear;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------- scrollbars */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--stroke-default) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/*
+ * Padding plus a transparent border keeps the thumb visually inset, so it floats
+ * over content the way Fluent's overlay scrollbars do instead of sitting in a gutter.
+ */
+::-webkit-scrollbar-thumb {
+  background: var(--stroke-default);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--stroke-strong);
+  background-clip: content-box;
+}
+
+/* --------------------------------------------------------------- focus rings */
+
+/*
+ * Focus is visible only for keyboard users, but when it shows it must be
+ * unmissable — the original build had no focus styling at all, which made the
+ * library impossible to navigate without a mouse.
+ */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ------------------------------------------------------------------ surfaces */
+
+.surface-raised {
+  background: var(--surface-raised);
+  border: 1px solid var(--stroke-subtle);
+}
+
+.acu-drag {
+  -webkit-app-region: drag;
+}
+
+.acu-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* -------------------------------------------------------------- icon buttons */
+
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    transform var(--duration-instant) var(--ease-out);
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--surface-raised-hover);
+  color: var(--text-primary);
+}
+
+.icon-button:active:not(:disabled) {
+  background: var(--surface-raised-active);
+  transform: scale(0.94);
+}
+
+.icon-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.icon-button[data-active='true'] {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+/* ------------------------------------------------------------- filter pills */
+
+.pill {
+  position: relative;
+  padding: 5px 13px;
+  border: 1px solid var(--stroke-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    transform var(--duration-instant) var(--ease-out);
+}
+
+.pill:hover {
+  background: var(--surface-raised-hover);
+  color: var(--text-primary);
+}
+
+.pill:active {
+  transform: scale(0.97);
+}
+
+.pill[aria-pressed='true'] {
+  background: var(--text-primary);
+  border-color: transparent;
+  color: var(--text-inverse);
+  font-weight: 600;
+}
+
+.pill-count {
+  margin-left: 5px;
+  opacity: 0.55;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------- library grid */
+
+/*
+ * auto-fill with a minmax track is what makes the library genuinely responsive:
+ * the window is user-resizable and docks to a third of the screen, so fixed
+ * column counts either overflow or waste space. Column count now follows width.
+ */
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(var(--cover-min), 1fr));
+  gap: calc(var(--gutter) * 1.4) var(--gutter);
+  align-items: start;
+}
+
+/*
+ * Lets the engine skip layout and paint for offscreen cards. contain-intrinsic-size
+ * supplies a placeholder box so the scrollbar stays stable while they are skipped —
+ * this is what keeps scrolling smooth on a large library without a virtualiser.
+ */
+.library-grid > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 280px;
+}
+
+/* --------------------------------------------------------------- book cards */
+
+.book-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+}
+
+.book-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.book-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1.5;
+  overflow: hidden;
+  border-radius: 3px var(--radius-md) var(--radius-md) 3px;
+  background: #14141a;
+  /* Layered shadow reads as a book resting on a shelf rather than a flat tile. */
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.5),
+    0 8px 18px -6px rgba(0, 0, 0, 0.7);
+  transform: translateZ(0);
+  transition:
+    transform var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.book-card:hover .book-cover,
+.book-card:focus-visible .book-cover {
+  transform: translateY(-6px) scale(1.012);
+  box-shadow:
+    0 1px 1px rgba(0, 0, 0, 0.5),
+    0 22px 42px -10px rgba(0, 0, 0, 0.85);
+}
+
+.book-card:active .book-cover {
+  transform: translateY(-2px) scale(0.99);
+  transition-duration: var(--duration-instant);
+}
+
+/* Spine gradient down the binding edge, and a page-block highlight opposite it. */
+.book-cover::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 13px;
+  background: linear-gradient(
+    to right,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.22) 45%,
+    rgba(255, 255, 255, 0.06) 92%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+.book-cover::after {
+  content: '';
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 2px;
+  background: linear-gradient(to right, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.26));
+  pointer-events: none;
+  z-index: 2;
+}
+
+.book-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Covers decode asynchronously; fade them in so the grid does not flicker. */
+  opacity: 0;
+  transition: opacity var(--duration-slow) var(--ease-out);
+}
+
+.book-cover img[data-loaded='true'] {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------------ continue shelf */
+
+/*
+ * Horizontal scroll-snap row, the Apple Books "Current" shelf. Snapping keeps
+ * covers aligned to the gutter however far the user flicks.
+ */
+.shelf-scroller {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(var(--cover-min), var(--cover-min));
+  gap: var(--gutter);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scroll-padding-left: var(--gutter);
+  padding-bottom: 6px;
+}
+
+.shelf-scroller > * {
+  scroll-snap-align: start;
+}
+
+/* --------------------------------------------------------------- transport */
+
+/*
+ * A range input cannot express a buffered track or a hover preview, so the
+ * scrubber is composed instead: a styled track, a fill, and an invisible native
+ * range on top that keeps full keyboard and pointer semantics for free.
+ */
+.scrubber {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 18px;
+  width: 100%;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.scrubber-track {
+  position: absolute;
+  inset-inline: 0;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised-active);
+  overflow: hidden;
+  transition: height var(--duration-fast) var(--ease-out);
+}
+
+.scrubber:hover .scrubber-track,
+.scrubber:focus-within .scrubber-track {
+  height: 6px;
+}
+
+.scrubber-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.scrubber-hover {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.scrubber-thumb {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-md);
+  transform: translateY(-50%) scale(0);
+  transition: transform var(--duration-fast) var(--ease-out);
+  pointer-events: none;
+}
+
+.scrubber:hover .scrubber-thumb,
+.scrubber:focus-within .scrubber-thumb {
+  transform: translateY(-50%) scale(1);
+}
+
+/* The real input stays interactive but invisible, layered over the custom track. */
+.scrubber input[type='range'] {
+  position: absolute;
+  inset-inline: 0;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- menus */
+
+.menu {
+  position: absolute;
+  z-index: 60;
+  min-width: 132px;
+  padding: 5px;
+  border: 1px solid var(--stroke-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-overlay);
+  backdrop-filter: blur(22px) saturate(160%);
+  box-shadow: var(--shadow-xl);
+  animation: menu-in var(--duration-fast) var(--ease-out);
+  transform-origin: var(--menu-origin, bottom left);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--duration-instant) var(--ease-out);
+}
+
+.menu-item:hover {
+  background: var(--surface-raised-hover);
+  color: var(--text-primary);
+}
+
+.menu-item[aria-checked='true'] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------- entrance anims */
+
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-rise {
+  animation: fade-rise var(--duration-normal) var(--ease-out) both;
+}
+
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-overlay-in {
+  animation: overlay-in var(--duration-fast) var(--ease-out) both;
+}
+
+.animate-sheet-in {
+  animation: sheet-in var(--duration-normal) var(--ease-spring) both;
+}
+
+/* The reader replaces the library; a slight rise makes the swap feel intentional. */
+@keyframes reader-in {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-reader-in {
+  animation: reader-in var(--duration-slow) var(--ease-out) both;
+}
+
+/* ------------------------------------------------------------- skeletons */
+
+@keyframes shimmer {
+  to {
+    background-position-x: -200%;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+      100deg,
+      var(--surface-raised) 38%,
+      var(--surface-raised-hover) 50%,
+      var(--surface-raised) 62%
+    )
+    0 0 / 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: var(--radius-md);
+}
+
+/* ------------------------------------------------------- narration highlight */
+
+/*
+ * The CSS Custom Highlight API paints the actively spoken sentence without
+ * mutating the chapter DOM — no wrapper spans, so the book's own markup and
+ * the user's text selection both stay intact.
+ */
+::highlight(acuity-narration) {
+  background-color: rgba(240, 178, 50, 0.26);
+  color: inherit;
+}
+
+/* ------------------------------------------------------------ reader themes */
+
+.reader-surface {
+  transition:
+    background-color var(--duration-normal) var(--ease-out),
+    color var(--duration-normal) var(--ease-out);
+}
+
+.reader-surface[data-theme='dark'] {
+  --reader-bg: #101013;
+  --reader-fg: #e6e6ea;
+  --reader-muted: rgba(230, 230, 234, 0.6);
+  --reader-rule: rgba(255, 255, 255, 0.1);
+  --reader-chrome: rgba(22, 22, 26, 0.88);
+}
+
+.reader-surface[data-theme='sepia'] {
+  --reader-bg: #f7f1e3;
+  --reader-fg: #3a3128;
+  --reader-muted: rgba(58, 49, 40, 0.64);
+  --reader-rule: rgba(58, 49, 40, 0.16);
+  --reader-chrome: rgba(240, 232, 214, 0.9);
+}
+
+.reader-surface[data-theme='light'] {
+  --reader-bg: #fbfbfc;
+  --reader-fg: #1b1c1f;
+  --reader-muted: rgba(27, 28, 31, 0.62);
+  --reader-rule: rgba(0, 0, 0, 0.12);
+  --reader-chrome: rgba(255, 255, 255, 0.9);
+}
+
+.reader-surface {
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+}
+
+/*
+ * Typography for parsed chapter markup. The EPUB supplies arbitrary tags, so the
+ * reader styles them here rather than trusting the book's own stylesheet (which
+ * is stripped during sanitisation).
+ */
+.reader-prose {
+  max-width: 38rem;
+  margin: 0 auto;
+  line-height: 1.72;
+  text-wrap: pretty;
+  hanging-punctuation: first last;
+}
+
+.reader-prose p {
+  margin: 0 0 1.05em;
+}
+
+.reader-prose h1,
+.reader-prose h2,
+.reader-prose h3,
+.reader-prose h4 {
+  margin: 1.9em 0 0.7em;
+  line-height: 1.24;
+  font-weight: 600;
+  text-wrap: balance;
+}
+
+.reader-prose h1 { font-size: 1.62em; }
+.reader-prose h2 { font-size: 1.36em; }
+.reader-prose h3 { font-size: 1.16em; }
+
+.reader-prose img {
+  max-width: 100%;
+  height: auto;
+  margin: 1.5em auto;
+  display: block;
+  border-radius: var(--radius-md);
+}
+
+.reader-prose blockquote {
+  margin: 1.5em 0;
+  padding-left: 1.15em;
+  border-left: 2px solid var(--reader-rule);
+  color: var(--reader-muted);
+  font-style: italic;
+}
+
+.reader-prose a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
+.reader-prose hr {
+  margin: 2.2em auto;
+  width: 36%;
+  border: none;
+  border-top: 1px solid var(--reader-rule);
+}
+
+.reader-prose ul,
+.reader-prose ol {
+  margin: 0 0 1.05em;
+  padding-left: 1.4em;
+}
+
+.reader-prose li {
+  margin-bottom: 0.4em;
+}
+
+/* Drop cap on the opening paragraph, the Apple Books signature. */
+.reader-prose[data-dropcap='true'] > p:first-of-type::first-letter {
+  float: left;
+  font-size: 3.1em;
+  line-height: 0.82;
+  padding: 0.06em 0.09em 0 0;
+  font-weight: 600;
+}
+
+/* Equaliser bars on the card of the currently playing audiobook. */
+@keyframes eq-bar {
+  from {
+    transform: scaleY(0.4);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}

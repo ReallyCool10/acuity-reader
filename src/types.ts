@@ -13,17 +13,22 @@ export interface MediaItem {
   fileSize: number;
   dateAdded: number;
   dirName: string;
+  /** Present for audio when the tag reader could determine a duration. */
+  durationSeconds?: number;
   companionPath?: string;
   companionType?: string;
+  /** Absolute path to cover art on disk; rendered via the acuity:// scheme. */
   coverUrl?: string;
 }
 
 export interface ProgressItem {
   id: string;
+  /** Audio position, in seconds. */
   currentTime?: number;
   duration?: number;
-  epubCfi?: string;
-  pdfPage?: number;
+  /** Reader position: index into the parsed spine, plus scroll offset within it. */
+  chapterIndex?: number;
+  chapterScroll?: number;
   percent: number;
   lastPlayed: number;
 }
@@ -33,7 +38,10 @@ export interface Bookmark {
   itemId: string;
   label: string;
   createdAt: number;
-  position: number | string; // seconds for audio, CFI or page for book
+  /** Seconds for audio, chapter index for books. */
+  position: number;
+  /** Surrounding text, so a bookmark is recognisable in a list. */
+  excerpt?: string;
   note?: string;
 }
 
@@ -43,6 +51,8 @@ export interface LibraryState {
   progress: Record<string, ProgressItem>;
   bookmarks: Record<string, Bookmark[]>;
 }
+
+export type SortKey = 'recent' | 'title' | 'author' | 'added';
 
 export interface ActiveAudioTrack {
   item: MediaItem;

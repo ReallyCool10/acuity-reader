@@ -1,5 +1,5 @@
-import React from 'react';
-import { X, FolderPlus, Trash2, RefreshCw, CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -26,90 +26,160 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   booksCount,
   audioCount,
 }) => {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+
+  /*
+   * Minimal focus management: remember what had focus, move into the dialog, and
+   * restore on close. Without this, dismissing the dialog drops focus onto the
+   * document body and keyboard navigation restarts from the top of the app.
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    const focusable = dialogRef.current?.querySelector<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    focusable?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+
+      const nodes = dialogRef.current?.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (!nodes || nodes.length === 0) return;
+
+      const first = nodes[0];
+      const last = nodes[nodes.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused.current?.focus();
+    };
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-sm bg-neutral-900/90 backdrop-blur-2xl border border-white/[0.12] rounded-2xl shadow-2xl overflow-hidden flex flex-col">
-        {/* Modal Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08]">
-          <h3 className="text-sm font-semibold text-neutral-100">Library Settings</h3>
-          <button
-            onClick={onClose}
-            className="p-1 text-neutral-400 hover:text-neutral-100 rounded-lg hover:bg-neutral-800 transition-colors"
-          >
-            <X className="w-4 h-4" />
+    <div
+      className="animate-overlay-in fixed inset-0 z-[70] flex items-center justify-center bg-black/55 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        className="animate-sheet-in w-full max-w-md overflow-hidden rounded-[var(--radius-xl)] border border-[var(--stroke-default)] bg-[var(--surface-overlay)] shadow-[var(--shadow-xl)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="flex items-center justify-between border-b border-[var(--stroke-subtle)] px-4 py-3">
+          <h2 id="settings-title" className="text-[13px] font-semibold text-[var(--text-primary)]">
+            Library folders
+          </h2>
+          <button type="button" onClick={onClose} className="icon-button" aria-label="Close settings">
+            <X className="h-3.5 w-3.5" />
           </button>
-        </div>
+        </header>
 
-        {/* Modal Content */}
-        <div className="p-4 space-y-4 text-xs">
-          {/* Note explaining automated scanning */}
-          <div className="p-3 bg-neutral-950/70 border border-neutral-800/80 rounded-xl space-y-1">
-            <div className="flex items-center gap-1.5 text-neutral-200 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Automated Organization</span>
-            </div>
-            <p className="text-[11px] text-neutral-400 leading-relaxed">
-              Add any parent directory. Acuity recursively scans for .m4b, .mp3, .epub, and .pdf files without requiring separate folders.
-            </p>
+        <div className="space-y-4 p-4">
+          <div className="grid grid-cols-3 gap-2">
+            {[
+              { label: 'Titles', value: totalItems },
+              { label: 'Books', value: booksCount },
+              { label: 'Audio', value: audioCount },
+            ].map((stat) => (
+              <div
+                key={stat.label}
+                className="surface-raised rounded-[var(--radius-md)] px-3 py-2.5 text-center"
+              >
+                <p className="text-[17px] font-semibold tabular-nums text-[var(--text-primary)]">
+                  {stat.value}
+                </p>
+                <p className="text-[10.5px] uppercase tracking-[0.1em] text-[var(--text-tertiary)]">
+                  {stat.label}
+                </p>
+              </div>
+            ))}
           </div>
 
-          {/* Watched Folders List */}
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="font-medium text-neutral-300">Monitored Folders ({folders.length})</span>
-              <button
-                onClick={onAddFolder}
-                className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium bg-neutral-100 text-neutral-900 rounded-md hover:bg-white transition-colors"
-              >
-                <FolderPlus className="w-3.5 h-3.5" />
-                <span>Add Folder</span>
-              </button>
-            </div>
-
+          <div className="space-y-1.5">
             {folders.length === 0 ? (
-              <div className="py-6 text-center text-neutral-500 border border-dashed border-neutral-800 rounded-xl">
-                No folders added yet. Click &quot;Add Folder&quot; to index your library.
-              </div>
+              <p className="py-3 text-center text-[12px] text-[var(--text-tertiary)]">
+                No folders are being watched yet.
+              </p>
             ) : (
-              <div className="max-h-40 overflow-y-auto space-y-1.5 pr-1">
-                {folders.map((folder) => (
-                  <div
-                    key={folder}
-                    className="flex items-center justify-between p-2 rounded-lg bg-neutral-950 border border-neutral-800/70 group"
+              folders.map((folder) => (
+                <div
+                  key={folder}
+                  className="surface-raised group flex items-center gap-2 rounded-[var(--radius-md)] px-3 py-2"
+                >
+                  <span
+                    className="min-w-0 flex-1 truncate text-[11.5px] text-[var(--text-secondary)]"
+                    title={folder}
+                    dir="rtl"
                   >
-                    <span className="truncate text-neutral-300 pr-2 font-mono text-[10px]" title={folder}>
-                      {folder}
-                    </span>
-                    <button
-                      onClick={() => onRemoveFolder(folder)}
-                      title="Remove folder"
-                      className="p-1 text-neutral-500 hover:text-red-400 rounded transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                    {folder}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onRemoveFolder(folder)}
+                    className="icon-button h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-red-400"
+                    aria-label={`Stop watching ${folder}`}
+                    title="Stop watching this folder"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))
             )}
           </div>
 
-          {/* Stats & Rescan */}
-          <div className="pt-2 border-t border-neutral-800/80 flex items-center justify-between">
-            <div className="text-[11px] text-neutral-400">
-              <span className="text-neutral-200 font-medium">{totalItems}</span> items ({booksCount} books, {audioCount} audio)
-            </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onAddFolder}
+              className="flex flex-1 items-center justify-center gap-2 rounded-[var(--radius-md)] bg-[var(--text-primary)] px-3 py-2 text-[12px] font-semibold text-[var(--text-inverse)] transition-transform duration-150 ease-[var(--ease-out)] hover:brightness-105 active:scale-[0.98]"
+            >
+              <FolderPlus className="h-3.5 w-3.5" />
+              Add folder
+            </button>
 
             <button
+              type="button"
               onClick={onRescan}
               disabled={isScanning || folders.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium bg-neutral-800 hover:bg-neutral-700 disabled:opacity-40 text-neutral-200 rounded-lg transition-colors"
+              className="flex items-center justify-center gap-2 rounded-[var(--radius-md)] border border-[var(--stroke-default)] px-3 py-2 text-[12px] font-medium text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)] disabled:opacity-40"
             >
-              <RefreshCw className={`w-3 h-3 ${isScanning ? 'animate-spin' : ''}`} />
-              <span>{isScanning ? 'Scanning...' : 'Rescan Library'}</span>
+              {isScanning ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              Rescan
             </button>
           </div>
+
+          <p className="text-[10.5px] leading-relaxed text-[var(--text-tertiary)]">
+            Acuity reads these folders and their subfolders. Covers and metadata come from embedded
+            tags where present, or from a matching image beside the file.
+          </p>
         </div>
       </div>
     </div>

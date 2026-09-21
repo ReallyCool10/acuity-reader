@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM"],
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
 
@@ -20,6 +20,10 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  /*
+   * The main process is checked by tsconfig.node.json, run as a sibling project by
+   * `npm run typecheck`. It is deliberately not a project reference: both configs
+   * set noEmit, and TypeScript rejects a reference to a non-emitting project.
+   */
+  "include": ["src"]
 }

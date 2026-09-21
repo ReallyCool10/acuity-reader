@@ -1,62 +1,30 @@
-import React, { useState } from 'react';
-import { Headphones, BookOpen, Play } from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { BookOpen, Headphones, Play } from 'lucide-react';
 import type { MediaItem, ProgressItem } from '../types';
+import { coverUrl } from '../lib/media';
 
 interface BookCardProps {
   item: MediaItem;
   progress?: ProgressItem;
   isPlaying?: boolean;
-  onOpenBook: (item: MediaItem) => void;
-  onPlayAudio: (item: MediaItem) => void;
+  onOpen: (item: MediaItem) => void;
 }
 
-// 6 Apple Books classical jacket palettes for titles without embedded cover art
+/**
+ * Generated jackets for titles with no embedded art. Hashing the title to a
+ * palette keeps a given book visually stable across rescans, so the shelf does
+ * not reshuffle its colours every time the library is refreshed.
+ */
 const JACKET_THEMES = [
-  {
-    gradient: 'from-[#1a1c22] via-[#121317] to-[#0a0b0d]',
-    border: 'border-white/10',
-    titleColor: 'text-amber-100/90',
-    accentColor: 'text-amber-400/80',
-    frameBorder: 'border-amber-400/20',
-  },
-  {
-    gradient: 'from-[#42121e] via-[#280911] to-[#120307]',
-    border: 'border-rose-950/40',
-    titleColor: 'text-rose-100/90',
-    accentColor: 'text-rose-300/80',
-    frameBorder: 'border-rose-300/20',
-  },
-  {
-    gradient: 'from-[#0e2a22] via-[#081a15] to-[#030d0a]',
-    border: 'border-emerald-950/40',
-    titleColor: 'text-emerald-100/90',
-    accentColor: 'text-emerald-400/80',
-    frameBorder: 'border-emerald-400/20',
-  },
-  {
-    gradient: 'from-[#122238] via-[#091422] to-[#040910]',
-    border: 'border-blue-950/40',
-    titleColor: 'text-sky-100/90',
-    accentColor: 'text-sky-300/80',
-    frameBorder: 'border-sky-300/20',
-  },
-  {
-    gradient: 'from-[#382012] via-[#221209] to-[#0e0703]',
-    border: 'border-amber-950/40',
-    titleColor: 'text-amber-100/90',
-    accentColor: 'text-amber-300/80',
-    frameBorder: 'border-amber-400/20',
-  },
-  {
-    gradient: 'from-[#2b143a] via-[#1a0a24] to-[#0b0410]',
-    border: 'border-purple-950/40',
-    titleColor: 'text-purple-100/90',
-    accentColor: 'text-purple-300/80',
-    frameBorder: 'border-purple-300/20',
-  },
+  { from: '#232630', to: '#0b0c0f', ink: '#f0e4cc', accent: '#d9b169' },
+  { from: '#43141f', to: '#140407', ink: '#f7dde2', accent: '#e79aa8' },
+  { from: '#0f2b23', to: '#04100c', ink: '#d9f2e6', accent: '#6cc9a2' },
+  { from: '#13243a', to: '#050a12', ink: '#dbe9f8', accent: '#7fb0e0' },
+  { from: '#3a2113', to: '#0f0704', ink: '#f6e4cf', accent: '#d9a463' },
+  { from: '#2c1540', to: '#0c0512', ink: '#ead9f6', accent: '#b384d8' },
 ];
 
-function getThemeForTitle(title: string) {
+function themeForTitle(title: string) {
   let hash = 0;
   for (let i = 0; i < title.length; i++) {
     hash = (hash << 5) - hash + title.charCodeAt(i);
@@ -65,163 +33,150 @@ function getThemeForTitle(title: string) {
   return JACKET_THEMES[Math.abs(hash) % JACKET_THEMES.length];
 }
 
-export const BookCard: React.FC<BookCardProps> = ({
-  item,
-  progress,
-  isPlaying,
-  onOpenBook,
-  onPlayAudio,
-}) => {
-  const [imageFailed, setImageFailed] = useState(false);
+export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, onOpen }) => {
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+
   const isAudio = item.mediaType === 'audio';
   const percent = progress?.percent ?? 0;
-  const hasCompanion = !!item.companionPath;
-  const theme = getThemeForTitle(item.title);
+  const src = coverUrl(item);
+  const theme = themeForTitle(item.title);
 
-  const handleClick = () => {
-    if (isAudio) {
-      onPlayAudio(item);
-    } else {
-      onOpenBook(item);
-    }
-  };
+  // A cached image can finish decoding before React attaches onLoad, which would
+  // otherwise leave it stuck at opacity 0. Check completeness on mount too.
+  const markLoaded = useCallback(() => setLoaded(true), []);
+  useEffect(() => {
+    if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) setLoaded(true);
+  }, [src]);
 
-  const hasValidCover = !!item.coverUrl && !imageFailed;
+  const showCover = Boolean(src) && !failed;
+
+  const label = `${item.title}${item.author ? `, by ${item.author}` : ''}. ${
+    isAudio ? 'Audiobook' : 'Book'
+  }${percent > 0 ? `, ${Math.round(percent)} percent complete` : ''}.`;
 
   return (
-    <div
-      onClick={handleClick}
-      className="group relative flex flex-col cursor-pointer select-none transition-transform duration-300 ease-out"
-    >
-      {/* Physical 3D Book Container */}
-      <div className="relative aspect-[1/1.45] w-full rounded-r-md rounded-l-xs overflow-hidden shadow-[0_8px_20px_-3px_rgba(0,0,0,0.6)] group-hover:shadow-[0_16px_36px_-4px_rgba(0,0,0,0.85)] group-hover:-translate-y-1.5 transition-all duration-300 ease-out bg-neutral-900">
-        {/* Realistic Book Spine Shadow (Left edge indent) */}
-        <div className="absolute top-0 bottom-0 left-0 w-3 bg-gradient-to-r from-black/50 via-black/15 to-transparent pointer-events-none z-20 rounded-l-xs" />
-
-        {/* Realistic Book Page Edge Highlight (Right edge) */}
-        <div className="absolute top-0 bottom-0 right-0 w-[1.5px] bg-white/20 pointer-events-none z-20" />
-
-        {/* Real Cover Image */}
-        {hasValidCover ? (
+    <button type="button" className="book-card group" onClick={() => onOpen(item)} aria-label={label}>
+      <div className="book-cover">
+        {showCover ? (
           <img
-            src={item.coverUrl}
-            alt={item.title}
-            onError={() => setImageFailed(true)}
-            className="w-full h-full object-cover select-none transition-transform duration-500 group-hover:scale-105"
+            ref={imgRef}
+            src={src}
+            alt=""
+            data-loaded={loaded}
             loading="lazy"
+            decoding="async"
+            onLoad={markLoaded}
+            onError={() => setFailed(true)}
           />
         ) : (
-          /* Procedural Apple Books Classic Hardcover Jacket */
           <div
-            className={`w-full h-full bg-gradient-to-br ${theme.gradient} p-3 flex flex-col justify-between border ${theme.border} relative`}
+            className="flex h-full w-full flex-col justify-between p-3"
+            style={{ background: `linear-gradient(145deg, ${theme.from}, ${theme.to})` }}
           >
-            {/* Subtle linen/bookcloth overlay texture */}
-            <div className="absolute inset-0 bg-[radial-gradient(#fff_1px,transparent_1px)] [background-size:12px_12px] opacity-[0.03] pointer-events-none" />
-
-            {/* Inner debossed foil frame */}
+            {/* Debossed foil frame, echoing a cloth-bound hardcover. */}
             <div
-              className={`absolute inset-2 border ${theme.frameBorder} rounded pointer-events-none`}
+              className="pointer-events-none absolute inset-2 rounded-[3px] border"
+              style={{ borderColor: `${theme.accent}33` }}
             />
-
-            {/* Top metadata on jacket */}
-            <div className="z-10 flex items-center justify-between">
-              <span className={`text-[9px] uppercase font-semibold tracking-wider ${theme.accentColor}`}>
+            <div className="relative flex items-center justify-between">
+              <span
+                className="text-[9px] font-semibold uppercase tracking-[0.14em]"
+                style={{ color: theme.accent }}
+              >
                 {item.format}
               </span>
               {isAudio ? (
-                <Headphones className={`w-3 h-3 ${theme.accentColor}`} />
+                <Headphones className="h-3 w-3" style={{ color: theme.accent }} />
               ) : (
-                <BookOpen className={`w-3 h-3 ${theme.accentColor}`} />
+                <BookOpen className="h-3 w-3" style={{ color: theme.accent }} />
               )}
             </div>
 
-            {/* Center Embossed Title & Author */}
-            <div className="z-10 my-auto text-center px-2 py-3 space-y-1.5">
+            <div className="relative my-auto px-1 text-center">
               <h4
-                className={`text-[12px] font-serif font-bold leading-tight line-clamp-3 ${theme.titleColor} drop-shadow-sm`}
+                className="line-clamp-4 font-serif text-[13px] font-semibold leading-snug"
+                style={{ color: theme.ink }}
               >
                 {item.title}
               </h4>
-              <p
-                className={`text-[10px] uppercase tracking-widest font-sans ${theme.accentColor} opacity-90 truncate`}
-              >
-                {item.author}
-              </p>
+              {item.author && (
+                <p
+                  className="mt-2 truncate text-[9px] uppercase tracking-[0.16em]"
+                  style={{ color: theme.accent }}
+                >
+                  {item.author}
+                </p>
+              )}
             </div>
 
-            {/* Bottom jacket mark */}
-            <div className="z-10 flex justify-center">
-              <div className={`w-4 h-0.5 rounded-full ${theme.accentColor} opacity-40`} />
+            <div className="relative flex justify-center">
+              <div
+                className="h-[2px] w-5 rounded-full opacity-50"
+                style={{ background: theme.accent }}
+              />
             </div>
           </div>
         )}
 
-        {/* Top Floating Badges (Format & Dual Companion) */}
-        <div className="absolute top-2 left-2 right-2 flex items-center justify-between z-20 pointer-events-none">
-          <span className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider rounded bg-black/60 backdrop-blur-md text-white/90 border border-white/10 shadow-sm">
-            {item.format}
+        {item.companionPath && (
+          <span
+            className="absolute right-2 top-2 z-[3] rounded-[4px] border border-white/15 bg-black/65 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/90 backdrop-blur-md"
+            title="Both a text and an audio edition are in your library"
+          >
+            Dual
           </span>
+        )}
 
-          {hasCompanion && (
-            <span
-              title="Companion edition available"
-              className="flex items-center gap-1 px-1.5 py-0.5 text-[9px] font-medium rounded bg-amber-500/80 backdrop-blur-md text-amber-950 font-semibold shadow-sm"
-            >
-              {isAudio ? <BookOpen className="w-2.5 h-2.5" /> : <Headphones className="w-2.5 h-2.5" />}
-              <span>Dual</span>
-            </span>
-          )}
-        </div>
-
-        {/* Play Overlay for Audiobooks */}
         {isAudio && (
-          <div className="absolute inset-0 flex items-center justify-center z-20 pointer-events-none">
+          <div className="pointer-events-none absolute inset-0 z-[3] flex items-center justify-center">
             {isPlaying ? (
-              <div className="flex items-end gap-1 p-2 rounded-full bg-black/70 backdrop-blur-md shadow-lg border border-amber-500/40">
-                <span className="w-1 h-3 bg-amber-400 animate-pulse rounded-full" />
-                <span className="w-1 h-5 bg-amber-400 animate-pulse delay-75 rounded-full" />
-                <span className="w-1 h-2.5 bg-amber-400 animate-pulse delay-150 rounded-full" />
-              </div>
+              <span className="flex items-end gap-[3px] rounded-full bg-black/70 p-2.5 backdrop-blur-md">
+                {[0, 1, 2].map((i) => (
+                  <span
+                    key={i}
+                    className="w-[3px] rounded-full bg-[var(--accent)]"
+                    style={{
+                      height: [10, 16, 7][i],
+                      animation: `eq-bar 900ms ${i * 140}ms ease-in-out infinite alternate`,
+                      transformOrigin: 'bottom',
+                    }}
+                  />
+                ))}
+              </span>
             ) : (
-              <div className="w-10 h-10 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center text-white opacity-0 group-hover:opacity-100 group-hover:scale-105 transition-all duration-200 shadow-xl">
-                <Play className="w-4 h-4 ml-0.5 text-white fill-white" />
-              </div>
+              <span className="flex h-11 w-11 translate-y-1 items-center justify-center rounded-full border border-white/25 bg-black/55 text-white opacity-0 backdrop-blur-md transition-all duration-200 ease-[var(--ease-out)] group-hover:translate-y-0 group-hover:opacity-100 group-focus-visible:translate-y-0 group-focus-visible:opacity-100">
+                <Play className="ml-0.5 h-4 w-4 fill-current" />
+              </span>
             )}
           </div>
         )}
 
-        {/* Bottom Reading / Audio Progress Bar */}
         {percent > 0 && (
-          <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/60 backdrop-blur-xs z-20">
+          <div className="absolute inset-x-0 bottom-0 z-[3] h-[3px] bg-black/55">
             <div
-              className={`h-full rounded-r-full ${
-                isAudio ? 'bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.6)]' : 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]'
-              }`}
-              style={{ width: `${Math.min(100, Math.max(2, percent))}%` }}
+              className="h-full rounded-r-full transition-[width] duration-300 ease-[var(--ease-out)]"
+              style={{
+                width: `${Math.min(100, Math.max(2, percent))}%`,
+                background: isAudio ? 'var(--accent)' : 'var(--accent-read)',
+              }}
             />
           </div>
         )}
       </div>
 
-      {/* Book Metadata Below Cover (Apple Books typography) */}
-      <div className="mt-2.5 px-0.5 flex flex-col min-w-0">
+      <div className="mt-2.5 min-w-0">
         <h4
-          className="text-[12px] font-semibold text-neutral-100 group-hover:text-amber-200 line-clamp-2 leading-snug transition-colors tracking-tight"
+          className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--text-primary)] transition-colors duration-150 group-hover:text-[var(--accent-hover)]"
           title={item.title}
         >
           {item.title}
         </h4>
-        <div className="flex items-center justify-between text-[11px] text-neutral-400 mt-0.5 font-normal">
-          <span className="truncate pr-1 group-hover:text-neutral-300" title={item.author}>
-            {item.author}
-          </span>
-          {percent > 0 && (
-            <span className="text-[10px] font-medium tabular-nums text-neutral-400 shrink-0">
-              {Math.round(percent)}%
-            </span>
-          )}
-        </div>
+        <p className="mt-0.5 truncate text-[11px] text-[var(--text-tertiary)]" title={item.author}>
+          {item.author}
+        </p>
       </div>
-    </div>
+    </button>
   );
 };

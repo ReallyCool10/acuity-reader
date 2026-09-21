@@ -1,62 +1,125 @@
 # Acuity Reader
 
-A minimalist, distraction-free desktop e-book and audiobook player for Windows (with macOS and mobile portability in mind). 
+A minimalist, distraction-free desktop e-book and audiobook player for Windows.
 
-Acuity brings text reading and spoken audio together under one roof, recognizing that knowledge and insight can be absorbed through multiple sensory modalities.
+Acuity brings text reading and spoken audio together under one roof, recognising that knowledge
+and insight can be absorbed through multiple sensory modalities.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Mobile-lightgrey.svg)
-![Architecture](https://img.shields.io/badge/engine-Tauri%20v2%20%2B%20React%20%2B%20Rust-orange.svg)
+![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
+![Engine](https://img.shields.io/badge/engine-Electron%20%2B%20React%20%2B%20TypeScript-orange.svg)
 
 ---
 
-## Features
+## Status
 
-- **Unified Media Support:** Natively handles `.m4b`, `.mp3`, `.m4a` (audiobooks) alongside `.epub` and `.pdf` (e-books & documents).
-- **Automated Library Scanning:** Point Acuity to any folder on your machine. The scanner automatically indexes, categorizes, and extracts covers/metadata without requiring rigid folder structures.
-- **Companion Pairing:** Automatically links companion audiobooks and text editions of the same title, allowing seamless switching between reading and listening.
-- **Persistent Progress & Bookmarks:** Independent, synchronized progress and bookmarking for all formats.
-- **Minimalist, Content-First UI:** Zero clutter, no banners, and no redundant controls. Fast filtering (`All`, `Books`, `Audio`) and instant search.
-- **Audiobook Controls:** Chapter navigation (M4B chapters & ID3 chapter frames), variable playback speed (`0.75x` – `3.0x`), skip buttons, and auto-save.
-- **Zen Reading View:** Clean typography, reflowable EPUB reading, PDF vector zoom/scrolling, customizable dark/sepia/light modes.
-- **Read-Aloud Narration:** Built-in Text-to-Speech (TTS) integration with synchronized sentence-level highlighting.
+Early development. This table is the honest state of each feature, so the rest of the document
+can be read as description rather than aspiration.
 
----
-
-## Tech Stack
-
-- **Shell:** [Tauri v2](https://v2.tauri.app/) (Rust + Windows WebView2)
-- **Frontend:** React, TypeScript, Tailwind CSS
-- **EPUB Engine:** [foliate-js](https://github.com/johnfactotum/foliate-js)
-- **PDF Engine:** [pdf.js](https://mozilla.github.io/pdf.js/)
-- **Audio & Tag Parsing:** Web Audio API & `music-metadata` / `lofty`
-- **Database:** Local SQLite database for library indexing, progress, and bookmarks
+| Feature | State |
+|:--|:--|
+| Library scanning, cover and metadata extraction | Working |
+| Audiobook playback (`.m4b`, `.mp3`, `.m4a`, `.aac`, `.flac`, `.ogg`, `.opus`) | Working |
+| Seeking within large audiobooks | Working (HTTP range streaming) |
+| EPUB reading, spine-ordered with embedded images | Working |
+| Read-aloud narration with sentence highlighting | Working (system TTS voices) |
+| Companion pairing of text and audio editions | Working (matched on normalised title) |
+| Progress persistence, per title and per format | Working |
+| Bookmarks | Captured and stored; **no UI yet to browse or jump to them** |
+| PDF reading | **Not implemented** — PDFs are indexed, but open to an explanatory notice |
+| M4B chapter markers / ID3 chapter frames | **Not implemented** — navigation is by timeline only |
+| SQLite library index | **Not implemented** — state is a JSON file in `userData` |
+| macOS / mobile builds | **Not implemented** — Windows only today |
 
 ---
 
-## Getting Started
+## Architecture
+
+**Electron** (main process + preload bridge) with a **React 19 + TypeScript** renderer, built by
+**Vite** and styled with **Tailwind CSS v4** over a CSS custom-property token layer.
+
+> **Note on `src-tauri/`**
+> The repository also contains a Tauri v2 scaffold. It is **not** the shipping shell — nothing
+> builds or runs it, and `package.json` targets Electron. It is retained only as a possible future
+> direction. Treat Electron as the real application until that is resolved one way or the other.
+
+### Local file access
+
+The renderer never loads `file://` URLs. Local media is requested through a custom `acuity://`
+scheme registered in the main process, which resolves each request against the user's registered
+library folders and refuses anything outside them. That is what allows Chromium's `webSecurity`
+to remain enabled while still streaming audio and covers off local disk.
+
+The handler implements HTTP range requests, without which `<audio>` cannot seek inside a
+multi-hundred-megabyte `.m4b` — it can only stream from the beginning.
+
+### Data
+
+Library state (folders, indexed items, progress, bookmarks) is a single JSON document in
+Electron's `userData` directory. Writes are debounced in the main process and committed
+atomically via write-to-temp-then-rename, so an interrupted write cannot truncate the library.
+
+View preferences (typeface, theme, volume, playback rate, sort order) live in `localStorage`;
+they are per-install chrome rather than user content.
+
+### EPUB pipeline
+
+`src/lib/epub.ts` reads the archive in **spine order** taken from the OPF package document —
+not zip entry order, which is arbitrary and interleaves front matter with chapters. Chapter
+markup is sanitised (scripts, styles, remote resources and inline event handlers removed) and
+embedded images are rewritten to blob URLs drawn from inside the archive.
+
+---
+
+## Getting started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v20+ recommended)
-- [Rust](https://www.rust-lang.org/tools/install) (`rustup` with MSVC toolchain on Windows)
+- [Node.js](https://nodejs.org/) 20 or newer
 
-### Installation
+### Install and run
 
 ```bash
-# Clone the repository
 git clone https://github.com/ReallyCool10/acuity-reader.git
 cd acuity-reader
-
-# Install dependencies
 npm install
 
-# Run the desktop app in development mode
-npm run tauri dev
+# Renderer dev server + Electron
+npm run dev
+
+# Type-check renderer and main process
+npm run typecheck
+
+# Production build
+npm run build
+npm start
 ```
+
+On Windows, `AcuityReader.cmd` and `run.vbs` launch an installed checkout directly; both resolve
+paths relative to themselves, so the repository can live anywhere.
+
+---
+
+## Keyboard
+
+| Key | Action |
+|:--|:--|
+| `Ctrl`/`Cmd` + `F` | Focus search |
+| `Space` | Play / pause (when the reader is closed) |
+| `←` / `→` | Previous / next chapter (in the reader) |
+| `Esc` | Close the reader, or clear focus from search |
+
+---
+
+## Testing
+
+There is **no test framework in this repository yet**. The EPUB parser and narration mapping are
+the most fragile parts of the codebase and currently have no automated protection. Adding Vitest
+with a DOM environment is the recommended next step; the parser's pure helpers (`resolveHref`,
+`extractText`, `sentenceBoundsAt`) are written to be directly unit-testable.
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE).

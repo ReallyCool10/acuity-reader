@@ -1,4 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { LibraryState, MediaItem } from '../src/types';
+
+export interface ScanProgress {
+  count: number;
+  folder: string;
+}
+
+export type PlayerCommand = 'toggle-play' | 'skip-back' | 'skip-forward';
 
 export interface ElectronAPI {
   minimize: () => Promise<void>;
@@ -7,13 +15,22 @@ export interface ElectronAPI {
   togglePin: () => Promise<boolean>;
   isPinned: () => Promise<boolean>;
   pickFolder: () => Promise<string | null>;
-  scanFolder: (path: string) => Promise<any[]>;
-  loadLibrary: () => Promise<any>;
-  saveLibrary: (data: any) => Promise<boolean>;
-  readBase64: (path: string) => Promise<string | null>;
+  revealInFolder: (path: string) => Promise<void>;
+  scanFolder: (path: string) => Promise<MediaItem[]>;
+  loadLibrary: () => Promise<LibraryState>;
+  saveLibrary: (data: LibraryState) => Promise<boolean>;
+  readBytes: (path: string) => Promise<Uint8Array | null>;
   updateThumbar: (isPlaying: boolean) => void;
-  onPlayerCommand: (callback: (command: 'toggle-play' | 'skip-back' | 'skip-forward') => void) => () => void;
+  onPlayerCommand: (callback: (command: PlayerCommand) => void) => () => void;
   onPinChanged: (callback: (isPinned: boolean) => void) => () => void;
+  onScanProgress: (callback: (progress: ScanProgress) => void) => () => void;
+}
+
+/** Wrap an ipcRenderer subscription so callers get an unsubscribe function back. */
+function subscribe<T>(channel: string, callback: (payload: T) => void): () => void {
+  const listener = (_event: Electron.IpcRendererEvent, payload: T) => callback(payload);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
 }
 
 const api: ElectronAPI = {
@@ -23,21 +40,15 @@ const api: ElectronAPI = {
   togglePin: () => ipcRenderer.invoke('window:togglePin'),
   isPinned: () => ipcRenderer.invoke('window:isPinned'),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
-  scanFolder: (folderPath: string) => ipcRenderer.invoke('scanner:scanFolder', folderPath),
+  revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),
+  scanFolder: (folderPath) => ipcRenderer.invoke('scanner:scanFolder', folderPath),
   loadLibrary: () => ipcRenderer.invoke('storage:load'),
-  saveLibrary: (data: any) => ipcRenderer.invoke('storage:save', data),
-  readBase64: (filePath: string) => ipcRenderer.invoke('file:readBase64', filePath),
-  updateThumbar: (isPlaying: boolean) => ipcRenderer.send('thumbar:update', { isPlaying }),
-  onPlayerCommand: (callback) => {
-    const subscription = (_: any, command: any) => callback(command);
-    ipcRenderer.on('player:command', subscription);
-    return () => ipcRenderer.removeListener('player:command', subscription);
-  },
-  onPinChanged: (callback) => {
-    const subscription = (_: any, pinned: boolean) => callback(pinned);
-    ipcRenderer.on('window:pinned-changed', subscription);
-    return () => ipcRenderer.removeListener('window:pinned-changed', subscription);
-  },
+  saveLibrary: (data) => ipcRenderer.invoke('storage:save', data),
+  readBytes: (filePath) => ipcRenderer.invoke('file:readBytes', filePath),
+  updateThumbar: (isPlaying) => ipcRenderer.send('thumbar:update', { isPlaying }),
+  onPlayerCommand: (callback) => subscribe('player:command', callback),
+  onPinChanged: (callback) => subscribe('window:pinned-changed', callback),
+  onScanProgress: (callback) => subscribe('scanner:progress', callback),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);
