@@ -8,3 +8,6 @@ if (typeof URL.createObjectURL === 'undefined') {
 if (typeof URL.revokeObjectURL === 'undefined') {
   URL.revokeObjectURL = (_url: string) => {};
 }
+
+// @ts-expect-error React 19 testing flag
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;

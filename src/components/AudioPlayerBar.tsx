@@ -4,16 +4,18 @@ import {
   Bookmark,
   ChevronDown,
   Headphones,
+  Moon,
   Pause,
   Play,
   RotateCcw,
   RotateCw,
+  Trash2,
   Volume1,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react';
-import type { MediaItem } from '../types';
+import type { Bookmark as BookmarkType, MediaItem } from '../types';
 import { coverUrl, mediaUrl } from '../lib/media';
 import { formatRemaining, formatTime } from '../lib/format';
 import { usePersistentState } from '../hooks/usePersistentState';
@@ -23,31 +25,49 @@ import { Scrubber } from './Scrubber';
 interface AudioPlayerBarProps {
   item: MediaItem;
   initialTime?: number;
+  bookmarks?: BookmarkType[];
   onClose: () => void;
   onProgressUpdate: (itemId: string, currentTime: number, duration: number) => void;
   onAddBookmark: (itemId: string, time: number) => void;
+  onRemoveBookmark?: (bookmarkId: string) => void;
   onSwitchToCompanion?: (companionPath: string) => void;
 }
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
 const SKIP_SECONDS = 15;
+const SLEEP_PRESETS: { label: string; minutes: number | null }[] = [
+  { label: 'Off', minutes: null },
+  { label: '5 minutes', minutes: 5 },
+  { label: '15 minutes', minutes: 15 },
+  { label: '30 minutes', minutes: 30 },
+  { label: '45 minutes', minutes: 45 },
+  { label: '60 minutes', minutes: 60 },
+];
 
 export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   item,
   initialTime = 0,
+  bookmarks = [],
   onClose,
   onProgressUpdate,
   onAddBookmark,
+  onRemoveBookmark,
   onSwitchToCompanion,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speedRef = useRef<HTMLDivElement | null>(null);
+  const sleepRef = useRef<HTMLDivElement | null>(null);
+  const bookmarksRef = useRef<HTMLDivElement | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(initialTime);
   const [duration, setDuration] = useState(item.durationSeconds ?? 0);
   const [previewTime, setPreviewTime] = useState<number | null>(null);
   const [isSpeedOpen, setIsSpeedOpen] = useState(false);
+  const [isSleepOpen, setIsSleepOpen] = useState(false);
+  const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
+  const [sleepMinutes, setSleepMinutes] = useState<number | null>(null);
+  const [sleepSecondsLeft, setSleepSecondsLeft] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,6 +77,33 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const [isMuted, setIsMuted] = usePersistentState('acuity.muted', false);
 
   useDismissable(speedRef, isSpeedOpen, () => setIsSpeedOpen(false));
+  useDismissable(sleepRef, isSleepOpen, () => setIsSleepOpen(false));
+  useDismissable(bookmarksRef, isBookmarksOpen, () => setIsBookmarksOpen(false));
+
+  /* Sleep timer countdown */
+  useEffect(() => {
+    if (sleepSecondsLeft === null || !isPlaying) return;
+    const interval = setInterval(() => {
+      setSleepSecondsLeft((prev) => {
+        if (prev === null || prev <= 1) {
+          if (audioRef.current && !audioRef.current.paused) {
+            audioRef.current.pause();
+          }
+          setIsPlaying(false);
+          setSleepMinutes(null);
+          return null;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [sleepSecondsLeft, isPlaying]);
+
+  const selectSleepPreset = useCallback((minutes: number | null) => {
+    setSleepMinutes(minutes);
+    setSleepSecondsLeft(minutes ? minutes * 60 : null);
+    setIsSleepOpen(false);
+  }, []);
 
   const src = useMemo(() => mediaUrl(item.filePath), [item.filePath]);
   const cover = coverUrl(item);
@@ -288,15 +335,90 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                 <BookOpen className="h-3.5 w-3.5" />
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => onAddBookmark(item.id, currentTime)}
-              className="icon-button"
-              aria-label="Bookmark this moment"
-              title="Bookmark this moment"
-            >
-              <Bookmark className="h-3.5 w-3.5" />
-            </button>
+            <div className="relative" ref={bookmarksRef}>
+              <button
+                type="button"
+                onClick={() => setIsBookmarksOpen((open) => !open)}
+                className="icon-button relative"
+                aria-label="Bookmarks"
+                title="Bookmarks"
+              >
+                <Bookmark className="h-3.5 w-3.5" />
+                {bookmarks.length > 0 && (
+                  <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
+                    {bookmarks.length}
+                  </span>
+                )}
+              </button>
+
+              {isBookmarksOpen && (
+                <div
+                  className="menu bottom-full right-0 mb-2 max-h-64 w-72 overflow-y-auto p-2"
+                  role="dialog"
+                  aria-label="Bookmarks"
+                >
+                  <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                      Bookmarks ({bookmarks.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAddBookmark(item.id, currentTime);
+                      }}
+                      className="flex items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--surface-raised)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-raised-hover)]"
+                    >
+                      + Add here
+                    </button>
+                  </div>
+
+                  {bookmarks.length === 0 ? (
+                    <p className="py-4 text-center text-[11px] text-[var(--text-tertiary)]">
+                      No bookmarks yet. Click "+ Add here" to save your spot.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      {bookmarks.map((bm) => (
+                        <div
+                          key={bm.id}
+                          className="group flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-[var(--surface-raised-hover)]"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              seekTo(bm.position);
+                              setIsBookmarksOpen(false);
+                            }}
+                            className="flex flex-1 flex-col truncate"
+                          >
+                            <span className="text-[11.5px] font-medium text-[var(--text-primary)]">
+                              {formatTime(bm.position)}
+                            </span>
+                            <span className="truncate text-[10.5px] text-[var(--text-tertiary)]">
+                              {bm.label}
+                            </span>
+                          </button>
+                          {onRemoveBookmark && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onRemoveBookmark(bm.id);
+                              }}
+                              className="icon-button opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                              aria-label="Delete bookmark"
+                              title="Delete bookmark"
+                            >
+                              <Trash2 className="h-3 w-3 text-red-400" />
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <button
               type="button"
               onClick={onClose}
@@ -329,37 +451,88 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
         {/* Transport */}
         <div className="flex items-center justify-between">
-          <div className="relative flex w-20 justify-start" ref={speedRef}>
-            <button
-              type="button"
-              onClick={() => setIsSpeedOpen((open) => !open)}
-              className="rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]"
-              aria-haspopup="menu"
-              aria-expanded={isSpeedOpen}
-              aria-label={`Playback speed, currently ${playbackRate} times`}
-            >
-              {playbackRate}×
-            </button>
+          <div className="flex w-24 items-center justify-start gap-1">
+            <div className="relative" ref={speedRef}>
+              <button
+                type="button"
+                onClick={() => setIsSpeedOpen((open) => !open)}
+                className="rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]"
+                aria-haspopup="menu"
+                aria-expanded={isSpeedOpen}
+                aria-label={`Playback speed, currently ${playbackRate} times`}
+              >
+                {playbackRate}×
+              </button>
 
-            {isSpeedOpen && (
-              <div className="menu bottom-full left-0 mb-1.5" role="menu">
-                {SPEEDS.map((rate) => (
-                  <button
-                    key={rate}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={playbackRate === rate}
-                    className="menu-item"
-                    onClick={() => {
-                      setPlaybackRate(rate);
-                      setIsSpeedOpen(false);
-                    }}
-                  >
-                    {rate}×
-                  </button>
-                ))}
-              </div>
-            )}
+              {isSpeedOpen && (
+                <div className="menu bottom-full left-0 mb-1.5" role="menu">
+                  {SPEEDS.map((rate) => (
+                    <button
+                      key={rate}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={playbackRate === rate}
+                      className="menu-item"
+                      onClick={() => {
+                        setPlaybackRate(rate);
+                        setIsSpeedOpen(false);
+                      }}
+                    >
+                      {rate}×
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="relative" ref={sleepRef}>
+              <button
+                type="button"
+                onClick={() => setIsSleepOpen((open) => !open)}
+                className={`flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums transition-colors duration-150 ${
+                  sleepSecondsLeft !== null
+                    ? 'bg-[var(--accent)] text-[var(--text-inverse)]'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
+                }`}
+                aria-haspopup="menu"
+                aria-expanded={isSleepOpen}
+                aria-label={
+                  sleepSecondsLeft !== null
+                    ? `Sleep timer active, ${Math.ceil(sleepSecondsLeft / 60)} minutes remaining`
+                    : 'Set sleep timer'
+                }
+                title={
+                  sleepSecondsLeft !== null
+                    ? `Sleep timer: ${Math.ceil(sleepSecondsLeft / 60)}m left`
+                    : 'Sleep timer'
+                }
+              >
+                <Moon className="h-3.5 w-3.5" />
+                {sleepSecondsLeft !== null && (
+                  <span>{Math.ceil(sleepSecondsLeft / 60)}m</span>
+                )}
+              </button>
+
+              {isSleepOpen && (
+                <div className="menu bottom-full left-0 mb-1.5 min-w-[130px]" role="menu">
+                  <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                    Sleep timer
+                  </div>
+                  {SLEEP_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={sleepMinutes === preset.minutes}
+                      className={`menu-item ${sleepMinutes === preset.minutes ? 'font-semibold text-[var(--accent)]' : ''}`}
+                      onClick={() => selectSleepPreset(preset.minutes)}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-center gap-2">

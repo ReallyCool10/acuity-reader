@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     pool: 'threads',
+    isolate: false,
     setupFiles: ['./src/test/setup.ts'],
   },
 });

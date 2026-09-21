@@ -14,9 +14,10 @@ import {
   Plus,
   Square,
   Sun,
+  Trash2,
   Type,
 } from 'lucide-react';
-import type { MediaItem, ProgressItem } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
 import { parseEpub, type EpubChapter } from '../lib/epub';
 import { canRenderInReader } from '../lib/media';
 import { formatReadingTime } from '../lib/format';
@@ -33,9 +34,11 @@ import {
 interface ReaderViewProps {
   item: MediaItem;
   initialProgress?: ProgressItem;
+  bookmarks?: BookmarkType[];
   onClose: () => void;
   onProgressUpdate: (itemId: string, chapterIndex: number, percent: number, scroll: number) => void;
   onAddBookmark: (itemId: string, chapterIndex: number, excerpt: string) => void;
+  onRemoveBookmark?: (bookmarkId: string) => void;
   onSwitchToAudio?: (companionPath: string) => void;
 }
 
@@ -50,9 +53,11 @@ const THEMES: { key: ReadingTheme; label: string; icon: typeof Moon }[] = [
 export const ReaderView: React.FC<ReaderViewProps> = ({
   item,
   initialProgress,
+  bookmarks = [],
   onClose,
   onProgressUpdate,
   onAddBookmark,
+  onRemoveBookmark,
   onSwitchToAudio,
 }) => {
   const scrollRef = useRef<HTMLElement | null>(null);
@@ -70,6 +75,7 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
   const [isNarrating, setIsNarrating] = useState(false);
   const [isAppearanceOpen, setIsAppearanceOpen] = useState(false);
   const [isTocOpen, setIsTocOpen] = useState(false);
+  const [navTab, setNavTab] = useState<'toc' | 'bookmarks'>('toc');
 
   const [fontSize, setFontSize] = usePersistentState('acuity.reader.fontSize', 18);
   const [lineHeight, setLineHeight] = usePersistentState('acuity.reader.lineHeight', 1.72);
@@ -319,25 +325,106 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
 
               {isTocOpen && (
                 <div
-                  className="menu left-0 top-full mt-1.5 max-h-[60vh] w-72 overflow-y-auto"
+                  className="menu left-0 top-full mt-1.5 flex max-h-[65vh] w-80 flex-col overflow-hidden p-2"
                   style={{ '--menu-origin': 'top left' } as React.CSSProperties}
-                  role="menu"
+                  role="dialog"
+                  aria-label="Contents and Bookmarks"
                 >
-                  {chapters.map((chapter, index) => (
+                  <div className="mb-2 flex rounded-[var(--radius-sm)] bg-[var(--surface-sunken)] p-0.5">
                     <button
-                      key={chapter.id}
                       type="button"
-                      role="menuitemradio"
-                      aria-checked={index === chapterIndex}
-                      className="menu-item"
-                      onClick={() => goToChapter(index)}
+                      onClick={() => setNavTab('toc')}
+                      className={`flex-1 rounded-[var(--radius-xs)] py-1 text-[11px] font-medium transition-colors ${
+                        navTab === 'toc'
+                          ? 'bg-[var(--surface-raised)] text-[var(--text-primary)] shadow-sm'
+                          : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                      }`}
                     >
-                      <span className="line-clamp-2 flex-1">{chapter.title}</span>
-                      <span className="shrink-0 text-[10px] tabular-nums opacity-50">
-                        {formatReadingTime(chapter.words)}
-                      </span>
+                      Contents ({chapters.length})
                     </button>
-                  ))}
+                    <button
+                      type="button"
+                      onClick={() => setNavTab('bookmarks')}
+                      className={`flex-1 rounded-[var(--radius-xs)] py-1 text-[11px] font-medium transition-colors ${
+                        navTab === 'bookmarks'
+                          ? 'bg-[var(--surface-raised)] text-[var(--text-primary)] shadow-sm'
+                          : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+                      }`}
+                    >
+                      Bookmarks ({bookmarks.length})
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto pr-1">
+                    {navTab === 'toc' ? (
+                      chapters.map((chapter, index) => (
+                        <button
+                          key={chapter.id}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={index === chapterIndex}
+                          className="menu-item"
+                          onClick={() => goToChapter(index)}
+                        >
+                          <span className="line-clamp-2 flex-1">{chapter.title}</span>
+                          <span className="shrink-0 text-[10px] tabular-nums opacity-50">
+                            {formatReadingTime(chapter.words)}
+                          </span>
+                        </button>
+                      ))
+                    ) : bookmarks.length === 0 ? (
+                      <p className="py-8 text-center text-[11px] text-[var(--text-tertiary)]">
+                        No bookmarks saved yet. Use the bookmark icon in the header to save passages.
+                      </p>
+                    ) : (
+                      <div className="flex flex-col gap-1.5">
+                        {bookmarks.map((bm) => (
+                          <div
+                            key={bm.id}
+                            className="group flex items-start justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-[var(--surface-raised-hover)]"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                goToChapter(bm.position);
+                                setIsTocOpen(false);
+                              }}
+                              className="flex flex-1 flex-col truncate"
+                            >
+                              <span className="text-[11.5px] font-semibold text-[var(--text-primary)]">
+                                {chapters[bm.position]?.title ?? `Chapter ${bm.position + 1}`}
+                              </span>
+                              {bm.excerpt && (
+                                <span className="mt-0.5 line-clamp-2 text-[10.5px] italic text-[var(--text-secondary)]">
+                                  "{bm.excerpt}"
+                                </span>
+                              )}
+                              <span className="mt-1 text-[9.5px] text-[var(--text-tertiary)]">
+                                {new Date(bm.createdAt).toLocaleDateString(undefined, {
+                                  month: 'short',
+                                  day: 'numeric',
+                                })}
+                              </span>
+                            </button>
+                            {onRemoveBookmark && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onRemoveBookmark(bm.id);
+                                }}
+                                className="icon-button opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                                aria-label="Delete bookmark"
+                                title="Delete bookmark"
+                              >
+                                <Trash2 className="h-3 w-3 text-red-400" />
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -499,11 +586,23 @@ export const ReaderView: React.FC<ReaderViewProps> = ({
                 onAddBookmark(item.id, chapterIndex, currentChapter?.text.slice(0, 140) ?? '')
               }
               className="icon-button"
-              style={{ color: 'var(--reader-muted)' }}
+              style={{
+                color: bookmarks.some((b) => b.position === chapterIndex)
+                  ? 'var(--accent)'
+                  : 'var(--reader-muted)',
+              }}
               aria-label="Bookmark this chapter"
-              title="Bookmark this chapter"
+              title={
+                bookmarks.some((b) => b.position === chapterIndex)
+                  ? 'Chapter bookmarked (click to add another)'
+                  : 'Bookmark this chapter'
+              }
             >
-              <Bookmark className="h-4 w-4" />
+              <Bookmark
+                className={`h-4 w-4 ${
+                  bookmarks.some((b) => b.position === chapterIndex) ? 'fill-current' : ''
+                }`}
+              />
             </button>
           )}
         </div>

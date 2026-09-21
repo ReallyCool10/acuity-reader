@@ -192,6 +192,19 @@ export default function App() {
     [updateLibrary]
   );
 
+  const removeBookmark = useCallback(
+    (itemId: string, bookmarkId: string) => {
+      updateLibrary((prev) => ({
+        ...prev,
+        bookmarks: {
+          ...prev.bookmarks,
+          [itemId]: (prev.bookmarks[itemId] ?? []).filter((b) => b.id !== bookmarkId),
+        },
+      }));
+    },
+    [updateLibrary]
+  );
+
   /* ------------------------------------------------------------ opening */
 
   const openItem = useCallback((item: MediaItem) => {
@@ -289,6 +302,17 @@ export default function App() {
         return;
       }
 
+      if (event.key === 'Escape') {
+        if (isSettingsOpen) {
+          setIsSettingsOpen(false);
+          return;
+        }
+        if (activeBookItem) {
+          setActiveBookItem(null);
+          return;
+        }
+      }
+
       // Space toggles playback, matching every media player; only when the
       // reader is closed, where the key means "scroll" instead.
       if (event.code === 'Space' && activeAudioItem && !activeBookItem) {
@@ -299,7 +323,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeAudioItem, activeBookItem]);
+  }, [activeAudioItem, activeBookItem, isSettingsOpen]);
 
   const hasLibrary = library.items.length > 0;
 
@@ -381,11 +405,13 @@ export default function App() {
           key={activeAudioItem.id}
           item={activeAudioItem}
           initialTime={library.progress[activeAudioItem.id]?.currentTime ?? 0}
+          bookmarks={library.bookmarks[activeAudioItem.id] ?? []}
           onClose={() => setActiveAudioItem(null)}
           onProgressUpdate={handleAudioProgress}
           onAddBookmark={(itemId, time) =>
             addBookmark(itemId, time, `Bookmark at ${Math.round(time / 60)} min`)
           }
+          onRemoveBookmark={(bookmarkId) => removeBookmark(activeAudioItem.id, bookmarkId)}
           onSwitchToCompanion={(companionPath) => {
             const companion = findByPath(companionPath);
             if (companion) setActiveBookItem(companion);
@@ -404,11 +430,13 @@ export default function App() {
             key={activeBookItem.id}
             item={activeBookItem}
             initialProgress={library.progress[activeBookItem.id]}
+            bookmarks={library.bookmarks[activeBookItem.id] ?? []}
             onClose={() => setActiveBookItem(null)}
             onProgressUpdate={handleBookProgress}
             onAddBookmark={(itemId, chapterIndex, excerpt) =>
               addBookmark(itemId, chapterIndex, `Chapter ${chapterIndex + 1}`, excerpt)
             }
+            onRemoveBookmark={(bookmarkId) => removeBookmark(activeBookItem.id, bookmarkId)}
             onSwitchToAudio={(companionPath) => {
               const companion = findByPath(companionPath);
               if (companion) {
