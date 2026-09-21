@@ -28,7 +28,7 @@ export function isReadable(item: MediaItem): boolean {
 }
 
 /** Formats the in-app reader can actually render today. */
-export const SUPPORTED_BOOK_FORMATS = new Set(['epub']);
+export const SUPPORTED_BOOK_FORMATS = new Set(['epub', 'pdf']);
 
 export function canRenderInReader(item: MediaItem): boolean {
   return SUPPORTED_BOOK_FORMATS.has(item.format.toLowerCase());

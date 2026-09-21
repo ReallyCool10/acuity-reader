@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
 import { parseEpub, type EpubChapter } from '../lib/epub';
+import { PdfReaderView } from './PdfReaderView';
 import { canRenderInReader } from '../lib/media';
 import { formatReadingTime } from '../lib/format';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
@@ -50,7 +51,7 @@ const THEMES: { key: ReadingTheme; label: string; icon: typeof Moon }[] = [
   { key: 'light', label: 'Light', icon: Sun },
 ];
 
-export const ReaderView: React.FC<ReaderViewProps> = ({
+const EpubReaderView: React.FC<ReaderViewProps> = ({
   item,
   initialProgress,
   bookmarks = [],
@@ -798,3 +799,10 @@ const ReaderNotice: React.FC<{
     )}
   </div>
 );
+
+export const ReaderView: React.FC<ReaderViewProps> = (props) => {
+  if (props.item.format.toLowerCase() === 'pdf') {
+    return <PdfReaderView {...props} />;
+  }
+  return <EpubReaderView {...props} />;
+};
