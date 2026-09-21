@@ -233,31 +233,41 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   }, [togglePlay, skip]);
 
   /*
-   * Media Session wires the transport into the OS: hardware media keys, the
-   * Windows volume flyout and the lock screen all drive playback through it.
+   * Media Session wires the transport into Windows 11 System Media Transport Controls:
+   * hardware media keys, the Windows volume flyout, action center, and lock screen.
    */
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: item.title,
-      artist: item.author || 'Unknown author',
-      album: item.album || 'Acuity Reader',
-      artwork: cover ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : [],
-    });
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: item.title,
+        artist: item.author || 'Unknown author',
+        album: activeChapter?.title || item.album || item.dirName || 'Acuity Reader',
+        artwork: cover
+          ? [
+              { src: cover, sizes: '96x96', type: 'image/jpeg' },
+              { src: cover, sizes: '128x128', type: 'image/jpeg' },
+              { src: cover, sizes: '256x256', type: 'image/jpeg' },
+              { src: cover, sizes: '512x512', type: 'image/jpeg' },
+            ]
+          : [],
+      });
+    } catch {
+      // Best-effort metadata setting
+    }
 
-    const handlers: [MediaSessionAction, MediaSessionActionHandler][] = [
+    const actions: [MediaSessionAction, MediaSessionActionHandler | null][] = [
       ['play', () => togglePlay()],
       ['pause', () => togglePlay()],
-      ['seekbackward', () => skip(-SKIP_SECONDS)],
-      ['seekforward', () => skip(SKIP_SECONDS)],
+      ['seekbackward', (details) => skip(-(details.seekOffset || SKIP_SECONDS))],
+      ['seekforward', (details) => skip(details.seekOffset || SKIP_SECONDS)],
       ['seekto', (details) => details.seekTime !== undefined && seekTo(details.seekTime)],
+      ['previoustrack', canGoPrev ? () => handlePrev() : null],
+      ['nexttrack', canGoNext ? () => handleNext() : null],
     ];
 
-    if (canGoPrev) handlers.push(['previoustrack', () => handlePrev()]);
-    if (canGoNext) handlers.push(['nexttrack', () => handleNext()]);
-
-    for (const [action, handler] of handlers) {
+    for (const [action, handler] of actions) {
       try {
         navigator.mediaSession.setActionHandler(action, handler);
       } catch {
@@ -266,7 +276,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     }
 
     return () => {
-      for (const [action] of handlers) {
+      for (const [action] of actions) {
         try {
           navigator.mediaSession.setActionHandler(action, null);
         } catch {
@@ -274,13 +284,45 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         }
       }
     };
-  }, [item.title, item.author, item.album, cover, togglePlay, skip, seekTo, canGoPrev, canGoNext, handlePrev, handleNext]);
+  }, [
+    item.title,
+    item.author,
+    item.album,
+    item.dirName,
+    activeChapter?.title,
+    cover,
+    togglePlay,
+    skip,
+    seekTo,
+    canGoPrev,
+    canGoNext,
+    handlePrev,
+    handleNext,
+  ]);
 
   useEffect(() => {
-    if ('mediaSession' in navigator) {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    try {
       navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+    } catch {
+      // Ignore
     }
   }, [isPlaying]);
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+    try {
+      if (duration > 0 && Number.isFinite(duration) && Number.isFinite(currentTime)) {
+        navigator.mediaSession.setPositionState?.({
+          duration: Math.max(0, duration),
+          playbackRate: playbackRate || 1,
+          position: Math.max(0, Math.min(currentTime, duration)),
+        });
+      }
+    } catch {
+      // Ignore
+    }
+  }, [currentTime, duration, playbackRate]);
 
   const handleLoadedMetadata = () => {
     const audio = audioRef.current;

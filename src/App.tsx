@@ -62,6 +62,35 @@ export default function App() {
     return () => unbind?.();
   }, []);
 
+  /* --------------------------------------------------- system theme & mica */
+
+  useEffect(() => {
+    function applyTheme(info: { isDark: boolean; accentColor: string | null }) {
+      if (info.isDark) {
+        document.documentElement.removeAttribute('data-theme');
+      } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+
+      if (info.accentColor) {
+        document.documentElement.style.setProperty('--system-accent', info.accentColor);
+        document.documentElement.setAttribute('data-accent-override', 'true');
+      } else {
+        document.documentElement.removeAttribute('data-accent-override');
+      }
+    }
+
+    void window.electronAPI?.getThemeInfo?.().then((info) => {
+      if (info) applyTheme(info);
+    });
+
+    const unbind = window.electronAPI?.onThemeChanged?.((info) => {
+      applyTheme(info);
+    });
+
+    return () => unbind?.();
+  }, []);
+
   const scanFolders = useCallback(
     async (foldersToScan: string[]) => {
       if (!window.electronAPI || foldersToScan.length === 0) return;

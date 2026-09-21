@@ -73,3 +73,9 @@ export interface ActiveAudioTrack {
   playbackRate: number;
   volume: number;
 }
+
+export interface ThemeInfo {
+  isDark: boolean;
+  accentColor: string | null;
+}
+

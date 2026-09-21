@@ -9,6 +9,8 @@ import {
   Menu,
   nativeImage,
   shell,
+  nativeTheme,
+  systemPreferences,
 } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -247,12 +249,33 @@ function updateThumbarButtons(isPlaying: boolean) {
 
 /* ------------------------------------------------------------------ window */
 
+function getTitleBarOverlay(isDark: boolean) {
+  return {
+    color: '#00000000',
+    symbolColor: isDark ? '#e2e8f0' : '#1e293b',
+    height: 40,
+  };
+}
+
+function getSystemAccentColor(): string | null {
+  try {
+    if (process.platform === 'win32' && systemPreferences?.getAccentColor) {
+      const color = systemPreferences.getAccentColor();
+      return color ? `#${color.slice(0, 6)}` : null;
+    }
+  } catch {
+    // Best-effort
+  }
+  return null;
+}
+
 function createMainWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
   const { x: workX, y: workY } = primaryDisplay.workArea;
 
   const winWidth = Math.max(420, Math.round(screenWidth / 3));
+  const isDark = nativeTheme.shouldUseDarkColors;
 
   mainWindow = new BrowserWindow({
     x: workX + screenWidth - winWidth,
@@ -262,14 +285,10 @@ function createMainWindow() {
     minWidth: 380,
     minHeight: 520,
     titleBarStyle: 'hidden',
-    titleBarOverlay: {
-      color: '#00000000',
-      symbolColor: '#e2e8f0',
-      height: 40,
-    },
+    titleBarOverlay: getTitleBarOverlay(isDark),
     icon: path.join(__dirname, '../resources/icon.ico'),
     backgroundMaterial: 'mica',
-    transparent: true,
+    backgroundColor: '#00000000',
     show: false,
     alwaysOnTop: false,
     webPreferences: {
@@ -795,6 +814,14 @@ ipcMain.handle('file:readBytes', async (_event, filePath: string) => {
   }
 });
 
+/** Return current system theme info (dark/light, accent color) */
+ipcMain.handle('system:getThemeInfo', async () => {
+  return {
+    isDark: nativeTheme.shouldUseDarkColors,
+    accentColor: getSystemAccentColor(),
+  };
+});
+
 /* -------------------------------------------------------------- lifecycle */
 
 // A second instance would fight over the tray icon and the library file.
@@ -813,6 +840,15 @@ if (!app.requestSingleInstanceLock()) {
     registerAllowedRoot(getCoversDir());
     createMainWindow();
     createTray();
+
+    nativeTheme.on('updated', () => {
+      const isDarkNow = nativeTheme.shouldUseDarkColors;
+      mainWindow?.setTitleBarOverlay(getTitleBarOverlay(isDarkNow));
+      mainWindow?.webContents.send('system:theme-changed', {
+        isDark: isDarkNow,
+        accentColor: getSystemAccentColor(),
+      });
+    });
   });
 }
 

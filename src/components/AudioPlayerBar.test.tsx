@@ -227,5 +227,67 @@ describe('AudioPlayerBar', () => {
       root.unmount();
     });
   });
+
+  it('synchronizes with Windows SMTC via navigator.mediaSession', async () => {
+    const mockSetActionHandler = vi.fn();
+    const mockSetPositionState = vi.fn();
+
+    class MockMediaMetadata {
+      title: string;
+      artist: string;
+      album: string;
+      artwork: Array<{ src: string }>;
+      constructor(init: { title: string; artist: string; album: string; artwork: Array<{ src: string }> }) {
+        this.title = init.title;
+        this.artist = init.artist;
+        this.album = init.album;
+        this.artwork = init.artwork;
+      }
+    }
+
+    // @ts-expect-error Mocking MediaMetadata in jsdom
+    globalThis.MediaMetadata = MockMediaMetadata;
+
+    const mockMediaSession = {
+      metadata: null as unknown,
+      playbackState: 'none',
+      setActionHandler: mockSetActionHandler,
+      setPositionState: mockSetPositionState,
+    };
+
+    Object.defineProperty(navigator, 'mediaSession', {
+      value: mockMediaSession,
+      configurable: true,
+      writable: true,
+    });
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={mockItem}
+          initialTime={100}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    expect(mockMediaSession.metadata).toBeDefined();
+    const metadata = mockMediaSession.metadata as { title: string; artist: string };
+    expect(metadata.title).toBe('Great Audiobook');
+    expect(metadata.artist).toBe('Jane Doe');
+
+    expect(mockSetActionHandler).toHaveBeenCalledWith('play', expect.any(Function));
+    expect(mockSetActionHandler).toHaveBeenCalledWith('pause', expect.any(Function));
+    expect(mockSetActionHandler).toHaveBeenCalledWith('seekbackward', expect.any(Function));
+    expect(mockSetActionHandler).toHaveBeenCalledWith('seekforward', expect.any(Function));
+    expect(mockSetActionHandler).toHaveBeenCalledWith('seekto', expect.any(Function));
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
 
