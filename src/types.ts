@@ -3,6 +3,13 @@ export type BookFormat = 'epub' | 'pdf';
 export type AudioFormat = 'm4b' | 'mp3' | 'm4a' | 'aac' | 'flac' | 'ogg' | 'opus';
 export type MediaFormat = BookFormat | AudioFormat;
 
+export interface AudioChapter {
+  id: string;
+  title: string;
+  startTime: number;
+  endTime?: number;
+}
+
 export interface MediaItem {
   id: string;
   title: string;
@@ -19,6 +26,10 @@ export interface MediaItem {
   companionType?: string;
   /** Absolute path to cover art on disk; rendered via the acuity:// scheme. */
   coverUrl?: string;
+  trackNumber?: number;
+  discNumber?: number;
+  album?: string;
+  chapters?: AudioChapter[];
 }
 
 export interface ProgressItem {

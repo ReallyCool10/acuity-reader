@@ -4,11 +4,14 @@ import {
   Bookmark,
   ChevronDown,
   Headphones,
+  ListMusic,
   Moon,
   Pause,
   Play,
   RotateCcw,
   RotateCw,
+  SkipBack,
+  SkipForward,
   Trash2,
   Volume1,
   Volume2,
@@ -31,6 +34,10 @@ interface AudioPlayerBarProps {
   onAddBookmark: (itemId: string, time: number) => void;
   onRemoveBookmark?: (bookmarkId: string) => void;
   onSwitchToCompanion?: (companionPath: string) => void;
+  onNextTrack?: () => void;
+  onPrevTrack?: () => void;
+  hasNextTrack?: boolean;
+  hasPrevTrack?: boolean;
 }
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
@@ -53,11 +60,16 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   onAddBookmark,
   onRemoveBookmark,
   onSwitchToCompanion,
+  onNextTrack,
+  onPrevTrack,
+  hasNextTrack = false,
+  hasPrevTrack = false,
 }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const speedRef = useRef<HTMLDivElement | null>(null);
   const sleepRef = useRef<HTMLDivElement | null>(null);
   const bookmarksRef = useRef<HTMLDivElement | null>(null);
+  const chaptersRef = useRef<HTMLDivElement | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(initialTime);
@@ -66,6 +78,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const [isSpeedOpen, setIsSpeedOpen] = useState(false);
   const [isSleepOpen, setIsSleepOpen] = useState(false);
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false);
+  const [isChaptersOpen, setIsChaptersOpen] = useState(false);
   const [sleepMinutes, setSleepMinutes] = useState<number | null>(null);
   const [sleepSecondsLeft, setSleepSecondsLeft] = useState<number | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -79,6 +92,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   useDismissable(speedRef, isSpeedOpen, () => setIsSpeedOpen(false));
   useDismissable(sleepRef, isSleepOpen, () => setIsSleepOpen(false));
   useDismissable(bookmarksRef, isBookmarksOpen, () => setIsBookmarksOpen(false));
+  useDismissable(chaptersRef, isChaptersOpen, () => setIsChaptersOpen(false));
 
   /* Sleep timer countdown */
   useEffect(() => {
@@ -156,6 +170,58 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     return () => window.removeEventListener('acuity:toggle-play', onToggle);
   }, [togglePlay]);
 
+  const chapters = useMemo(() => item.chapters ?? [], [item.chapters]);
+
+  const activeChapter = useMemo(() => {
+    if (chapters.length === 0) return null;
+    for (let i = chapters.length - 1; i >= 0; i--) {
+      if (currentTime >= chapters[i].startTime) {
+        return chapters[i];
+      }
+    }
+    return chapters[0];
+  }, [chapters, currentTime]);
+
+  const canGoPrev = hasPrevTrack || chapters.length > 0 || currentTime > 3;
+  const canGoNext =
+    hasNextTrack ||
+    (chapters.length > 0 &&
+      Boolean(activeChapter && chapters.findIndex((c) => c.id === activeChapter.id) < chapters.length - 1));
+
+  const handlePrev = useCallback(() => {
+    if (chapters.length > 0) {
+      if (activeChapter && currentTime - activeChapter.startTime > 3) {
+        seekTo(activeChapter.startTime);
+        return;
+      }
+      const curIdx = chapters.findIndex((c) => c.id === activeChapter?.id);
+      if (curIdx > 0) {
+        seekTo(chapters[curIdx - 1].startTime);
+        return;
+      }
+    }
+
+    if (onPrevTrack && hasPrevTrack) {
+      onPrevTrack();
+    } else {
+      seekTo(0);
+    }
+  }, [chapters, activeChapter, currentTime, seekTo, onPrevTrack, hasPrevTrack]);
+
+  const handleNext = useCallback(() => {
+    if (chapters.length > 0) {
+      const curIdx = chapters.findIndex((c) => c.id === activeChapter?.id);
+      if (curIdx >= 0 && curIdx < chapters.length - 1) {
+        seekTo(chapters[curIdx + 1].startTime);
+        return;
+      }
+    }
+
+    if (onNextTrack && hasNextTrack) {
+      onNextTrack();
+    }
+  }, [chapters, activeChapter, seekTo, onNextTrack, hasNextTrack]);
+
   /* Taskbar thumbnail buttons and the tray menu drive the same transport. */
   useEffect(() => {
     const unbind = window.electronAPI?.onPlayerCommand((command) => {
@@ -176,7 +242,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     navigator.mediaSession.metadata = new MediaMetadata({
       title: item.title,
       artist: item.author || 'Unknown author',
-      album: 'Acuity Reader',
+      album: item.album || 'Acuity Reader',
       artwork: cover ? [{ src: cover, sizes: '512x512', type: 'image/jpeg' }] : [],
     });
 
@@ -187,6 +253,9 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       ['seekforward', () => skip(SKIP_SECONDS)],
       ['seekto', (details) => details.seekTime !== undefined && seekTo(details.seekTime)],
     ];
+
+    if (canGoPrev) handlers.push(['previoustrack', () => handlePrev()]);
+    if (canGoNext) handlers.push(['nexttrack', () => handleNext()]);
 
     for (const [action, handler] of handlers) {
       try {
@@ -205,7 +274,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         }
       }
     };
-  }, [item.title, item.author, cover, togglePlay, skip, seekTo]);
+  }, [item.title, item.author, item.album, cover, togglePlay, skip, seekTo, canGoPrev, canGoNext, handlePrev, handleNext]);
 
   useEffect(() => {
     if ('mediaSession' in navigator) {
@@ -254,7 +323,12 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         onTimeUpdate={handleTimeUpdate}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onEnded={() => setIsPlaying(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          if (onNextTrack && hasNextTrack) {
+            onNextTrack();
+          }
+        }}
         onError={() => setError('This file could not be played.')}
       />
 
@@ -320,7 +394,12 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
           <div className="min-w-0 flex-1">
             <p className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">{item.title}</p>
-            <p className="truncate text-[11px] text-[var(--text-tertiary)]">{item.author}</p>
+            <p className="truncate text-[11px] text-[var(--text-tertiary)]">
+              {item.author}
+              {activeChapter ? (
+                <span className="text-[var(--text-secondary)] font-medium"> • {activeChapter.title}</span>
+              ) : null}
+            </p>
           </div>
 
           <div className="flex shrink-0 items-center">
@@ -334,6 +413,64 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
               >
                 <BookOpen className="h-3.5 w-3.5" />
               </button>
+            )}
+            {chapters.length > 0 && (
+              <div className="relative" ref={chaptersRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsChaptersOpen((open) => !open)}
+                  className={`icon-button relative ${isChaptersOpen ? 'text-[var(--accent)] bg-[var(--surface-raised)]' : ''}`}
+                  aria-label="Chapters"
+                  title="Chapters"
+                >
+                  <ListMusic className="h-3.5 w-3.5" />
+                  <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
+                    {chapters.length}
+                  </span>
+                </button>
+
+                {isChaptersOpen && (
+                  <div
+                    className="menu bottom-full right-0 mb-2 max-h-64 w-72 overflow-y-auto p-2"
+                    role="dialog"
+                    aria-label="Chapters"
+                  >
+                    <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                        Chapters ({chapters.length})
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      {chapters.map((chap, idx) => {
+                        const isCurrent = activeChapter?.id === chap.id;
+                        return (
+                          <button
+                            key={chap.id}
+                            type="button"
+                            onClick={() => {
+                              seekTo(chap.startTime);
+                              setIsChaptersOpen(false);
+                            }}
+                            className={`flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[12px] transition-colors ${
+                              isCurrent
+                                ? 'bg-[var(--accent)]/15 text-[var(--accent)] font-medium'
+                                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]'
+                            }`}
+                          >
+                            <span className="truncate pr-2">
+                              {idx + 1}. {chap.title}
+                            </span>
+                            <span className="shrink-0 text-[10.5px] tabular-nums opacity-60">
+                              {formatTime(chap.startTime)}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
             <div className="relative" ref={bookmarksRef}>
               <button
@@ -535,7 +672,18 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handlePrev}
+              disabled={!canGoPrev}
+              className={`icon-button ${!canGoPrev ? 'cursor-not-allowed opacity-30 hover:bg-transparent' : ''}`}
+              aria-label={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
+              title={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
+            >
+              <SkipBack className="h-4 w-4" />
+            </button>
+
             <button
               type="button"
               onClick={() => skip(-SKIP_SECONDS)}
@@ -549,7 +697,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             <button
               type="button"
               onClick={togglePlay}
-              className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--text-inverse)] shadow-[var(--shadow-md)] transition-all duration-150 ease-[var(--ease-out)] hover:bg-[var(--accent-hover)] hover:scale-105 active:scale-95"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--text-inverse)] shadow-[var(--shadow-md)] transition-all duration-150 ease-[var(--ease-out)] hover:scale-105 hover:bg-[var(--accent-hover)] active:scale-95"
               aria-label={isPlaying ? 'Pause' : 'Play'}
               title={isPlaying ? 'Pause' : 'Play'}
             >
@@ -568,6 +716,17 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
               title="Forward 15 seconds"
             >
               <RotateCw className="h-4 w-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleNext}
+              disabled={!canGoNext}
+              className={`icon-button ${!canGoNext ? 'cursor-not-allowed opacity-30 hover:bg-transparent' : ''}`}
+              aria-label={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
+              title={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
+            >
+              <SkipForward className="h-4 w-4" />
             </button>
           </div>
 

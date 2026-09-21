@@ -20,6 +20,8 @@ import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
 import { computeStableId, migrateLibraryState } from './id';
 import { pairCompanions } from './pairing';
+import { parseAudioChapters, extractChplFromFile } from './audio';
+import type { AudioChapter } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -537,6 +539,10 @@ interface ScannedItem {
   companionPath?: string;
   companionType?: string;
   coverUrl?: string;
+  trackNumber?: number;
+  discNumber?: number;
+  album?: string;
+  chapters?: AudioChapter[];
 }
 
 /** In-memory cache of scanned items to avoid re-parsing tags and covers on rescan. */
@@ -589,18 +595,43 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       let title = fromName.title || entry.name;
       let author = fromName.author;
       let durationSeconds: number | undefined;
+      let trackNumber: number | undefined;
+      let discNumber: number | undefined;
+      let album: string | undefined;
+      let chapters: AudioChapter[] | undefined;
 
       // Embedded metadata beats filename guessing wherever it exists.
       if (mediaType === 'audio') {
         try {
-          const meta = await mm.parseFile(fullPath, { skipPostHeaders: true, duration: true });
+          const meta = await mm.parseFile(fullPath, {
+            skipPostHeaders: true,
+            duration: true,
+            includeChapters: true,
+          });
           if (meta.common?.title) title = meta.common.title;
           if (meta.common?.artist || meta.common?.albumartist) {
             author = meta.common.albumartist || meta.common.artist || author;
           }
           if (meta.format?.duration) durationSeconds = meta.format.duration;
+          if (meta.common?.track?.no) trackNumber = meta.common.track.no;
+          if (meta.common?.disk?.no) discNumber = meta.common.disk.no;
+          if (meta.common?.album) album = meta.common.album;
+
+          if (meta.format?.chapters && meta.format.chapters.length > 0) {
+            chapters = parseAudioChapters(meta.format.chapters, meta.format.sampleRate, durationSeconds);
+          }
         } catch {
           // Keep the filename-derived values.
+        }
+
+        // If no chapters found yet and it's an m4b/mp4/m4a file, check for Nero chpl atom
+        if ((!chapters || chapters.length === 0) && (ext === '.m4b' || ext === '.m4a' || ext === '.mp4')) {
+          try {
+            const chplChapters = await extractChplFromFile(fullPath);
+            if (chplChapters.length > 0) chapters = chplChapters;
+          } catch {
+            // Ignore
+          }
         }
       } else if (ext === '.epub') {
         const meta = await readEpubMetadata(fullPath);
@@ -623,6 +654,10 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         dirName: parentDirName,
         durationSeconds,
         coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name),
+        trackNumber,
+        discNumber,
+        album,
+        chapters,
       };
 
       itemMetadataCache.set(fullPath, scannedItem);

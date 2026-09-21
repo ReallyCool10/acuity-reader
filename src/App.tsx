@@ -9,6 +9,7 @@ import { ReaderView } from './components/ReaderView';
 import { SettingsModal } from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
+import { findSiblingTracks } from './lib/playlist';
 import type { Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
 const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {} };
@@ -217,6 +218,23 @@ export default function App() {
     [library.items]
   );
 
+  const siblingTracks = useMemo(() => {
+    if (!activeAudioItem) return { playlist: [], currentIndex: 0, prevItem: null, nextItem: null };
+    return findSiblingTracks(activeAudioItem, library.items);
+  }, [activeAudioItem, library.items]);
+
+  const handleNextTrack = useCallback(() => {
+    if (siblingTracks.nextItem) {
+      setActiveAudioItem(siblingTracks.nextItem);
+    }
+  }, [siblingTracks.nextItem]);
+
+  const handlePrevTrack = useCallback(() => {
+    if (siblingTracks.prevItem) {
+      setActiveAudioItem(siblingTracks.prevItem);
+    }
+  }, [siblingTracks.prevItem]);
+
   /* --------------------------------------------------------- filtering */
 
   const counts = useMemo(
@@ -412,6 +430,10 @@ export default function App() {
             addBookmark(itemId, time, `Bookmark at ${Math.round(time / 60)} min`)
           }
           onRemoveBookmark={(bookmarkId) => removeBookmark(activeAudioItem.id, bookmarkId)}
+          onNextTrack={siblingTracks.nextItem ? handleNextTrack : undefined}
+          onPrevTrack={siblingTracks.prevItem ? handlePrevTrack : undefined}
+          hasNextTrack={Boolean(siblingTracks.nextItem)}
+          hasPrevTrack={Boolean(siblingTracks.prevItem)}
           onSwitchToCompanion={(companionPath) => {
             const companion = findByPath(companionPath);
             if (companion) setActiveBookItem(companion);

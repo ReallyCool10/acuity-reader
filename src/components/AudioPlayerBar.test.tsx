@@ -126,4 +126,106 @@ describe('AudioPlayerBar', () => {
       root.unmount();
     });
   });
+
+  it('invokes onNextTrack when next track button is clicked', async () => {
+    const root = createRoot(container);
+    const onNextTrack = vi.fn();
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={mockItem}
+          hasNextTrack={true}
+          onNextTrack={onNextTrack}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const nextBtn = container.querySelector('button[aria-label="Next track"]') as HTMLButtonElement | null;
+    expect(nextBtn).toBeDefined();
+    expect(nextBtn?.disabled).toBe(false);
+
+    await act(async () => {
+      nextBtn?.click();
+    });
+
+    expect(onNextTrack).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('renders chapters badge, active chapter subtitle, and allows jumping to a chapter', async () => {
+    const itemWithChapters: MediaItem = {
+      ...mockItem,
+      chapters: [
+        { id: 'ch-1', title: 'Prologue: The Fall', startTime: 0, endTime: 300 },
+        { id: 'ch-2', title: 'Chapter 1: Awakenings', startTime: 300, endTime: 900 },
+      ],
+    };
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={itemWithChapters}
+          initialTime={350}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    // Subtitle shows Chapter 1: Awakenings because currentTime is 350
+    expect(container.textContent).toContain('Chapter 1: Awakenings');
+
+    const chapBtn = container.querySelector('button[aria-label="Chapters"]') as HTMLButtonElement | null;
+    expect(chapBtn).toBeDefined();
+    expect(chapBtn?.textContent).toContain('2');
+
+    await act(async () => {
+      chapBtn?.click();
+    });
+
+    expect(container.textContent).toContain('Chapters (2)');
+    expect(container.textContent).toContain('1. Prologue: The Fall');
+    expect(container.textContent).toContain('2. Chapter 1: Awakenings');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('auto-advances to next track when track playback ends', async () => {
+    const root = createRoot(container);
+    const onNextTrack = vi.fn();
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={mockItem}
+          hasNextTrack={true}
+          onNextTrack={onNextTrack}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const audioElement = container.querySelector('audio') as HTMLAudioElement;
+    expect(audioElement).toBeDefined();
+
+    await act(async () => {
+      audioElement.dispatchEvent(new Event('ended'));
+    });
+
+    expect(onNextTrack).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
+
