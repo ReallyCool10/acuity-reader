@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
-import { FolderOpen, Loader2, Pin, PinOff, RefreshCw } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, FolderOpen, Loader2, Pin, PinOff, RefreshCw, Settings } from 'lucide-react';
 import { AcuityLogo } from './AcuityLogo';
+import { useDismissable } from '../hooks/useDismissable';
 
 interface TitleBarControlsProps {
   onOpenSettings: () => void;
@@ -16,6 +17,10 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
   scanCount,
 }) => {
   const [isPinned, setIsPinned] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useDismissable(menuRef, isMenuOpen, () => setIsMenuOpen(false));
 
   useEffect(() => {
     void window.electronAPI?.isPinned().then(setIsPinned);
@@ -30,7 +35,7 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
 
   return (
     <header
-      className="acu-drag flex shrink-0 items-center justify-between border-b border-[var(--stroke-subtle)] px-3"
+      className="acu-drag relative z-30 flex shrink-0 items-center justify-between border-b border-[var(--stroke-subtle)] px-3"
       style={{ height: 'var(--titlebar-height)' }}
     >
       <div className="flex min-w-0 items-center gap-2">
@@ -48,12 +53,13 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
       </div>
 
       {/*
-        Keep the action buttons clear of the native caption controls. The Window
+        Keep the settings menu clear of the native caption controls. The Window
         Controls Overlay exposes the usable title-bar rect; the fallback covers
         runtimes that do not, replacing the magic constant this used to hardcode.
       */}
       <div
-        className="acu-no-drag flex items-center gap-0.5"
+        ref={menuRef}
+        className="acu-no-drag relative flex items-center"
         style={{
           paddingRight:
             'calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px))',
@@ -61,36 +67,78 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
       >
         <button
           type="button"
-          onClick={onRescan}
-          disabled={isScanning}
-          className="icon-button"
-          aria-label="Rescan library"
-          title="Rescan library"
+          onClick={() => setIsMenuOpen((prev) => !prev)}
+          className={`icon-button ${isMenuOpen ? 'active' : ''}`}
+          aria-haspopup="menu"
+          aria-expanded={isMenuOpen}
+          aria-label="Settings and options"
+          title="Settings"
         >
-          <RefreshCw className={`h-3.5 w-3.5 ${isScanning ? 'animate-spin text-[var(--accent)]' : ''}`} />
+          <Settings className={`h-3.5 w-3.5 transition-transform duration-200 ${isMenuOpen ? 'rotate-45' : ''}`} />
         </button>
 
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="icon-button"
-          aria-label="Library folders"
-          title="Library folders"
-        >
-          <FolderOpen className="h-3.5 w-3.5" />
-        </button>
+        {isMenuOpen && (
+          <div
+            className="menu right-0 top-full mt-1.5 w-56 p-1.5 z-50 shadow-2xl"
+            style={{ '--menu-origin': 'top right' } as React.CSSProperties}
+            role="menu"
+            aria-label="Settings"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              disabled={isScanning}
+              onClick={() => {
+                onRescan();
+                setIsMenuOpen(false);
+              }}
+              className="menu-item disabled:opacity-50"
+            >
+              <div className="flex items-center gap-2.5">
+                <RefreshCw className={`h-3.5 w-3.5 ${isScanning ? 'animate-spin text-[var(--accent)]' : ''}`} />
+                <span>{isScanning ? 'Rescanning library…' : 'Rescan library'}</span>
+              </div>
+            </button>
 
-        <button
-          type="button"
-          onClick={togglePin}
-          data-active={isPinned}
-          className="icon-button"
-          aria-pressed={isPinned}
-          aria-label={isPinned ? 'Unpin window' : 'Keep window on top'}
-          title={isPinned ? 'Unpin window' : 'Keep window on top'}
-        >
-          {isPinned ? <Pin className="h-3.5 w-3.5" /> : <PinOff className="h-3.5 w-3.5" />}
-        </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onOpenSettings();
+                setIsMenuOpen(false);
+              }}
+              className="menu-item"
+            >
+              <div className="flex items-center gap-2.5">
+                <FolderOpen className="h-3.5 w-3.5" />
+                <span>Library folders</span>
+              </div>
+            </button>
+
+            <div className="my-1 border-t border-[var(--stroke-subtle)]" />
+
+            <button
+              type="button"
+              role="menuitemcheckbox"
+              aria-checked={isPinned}
+              onClick={() => {
+                void togglePin();
+                setIsMenuOpen(false);
+              }}
+              className="menu-item"
+            >
+              <div className="flex items-center gap-2.5">
+                {isPinned ? (
+                  <Pin className="h-3.5 w-3.5 text-[var(--accent)]" />
+                ) : (
+                  <PinOff className="h-3.5 w-3.5" />
+                )}
+                <span>Keep window on top</span>
+              </div>
+              {isPinned && <Check className="h-3.5 w-3.5 text-[var(--accent)]" />}
+            </button>
+          </div>
+        )}
       </div>
     </header>
   );

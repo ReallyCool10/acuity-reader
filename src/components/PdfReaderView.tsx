@@ -374,7 +374,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     >
       {/* ---------------------------------------------------------- HEADER */}
       <header
-        className="acu-drag relative z-20 flex h-12 flex-shrink-0 items-center justify-between border-b px-3 backdrop-blur-md"
+        className="acu-drag relative z-40 flex h-12 flex-shrink-0 items-center justify-between border-b px-3 backdrop-blur-md"
         style={{
           borderColor: 'rgba(255, 255, 255, 0.08)',
           backgroundColor: 'rgba(15, 23, 42, 0.45)',
@@ -653,7 +653,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="relative flex-1 overflow-y-auto overflow-x-auto px-4 py-6 scroll-smooth"
+        className="relative z-10 flex-1 overflow-y-auto overflow-x-auto px-4 py-6 scroll-smooth"
       >
         {status === 'loading' && (
           <div className="flex h-full flex-col items-center justify-center gap-3">

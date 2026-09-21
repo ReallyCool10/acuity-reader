@@ -467,7 +467,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       data-theme={theme}
     >
       <header
-        className="acu-drag flex h-12 shrink-0 items-center justify-between gap-2 border-b px-2.5 backdrop-blur-xl"
+        className="acu-drag relative z-40 flex h-12 shrink-0 items-center justify-between gap-2 border-b px-2.5 backdrop-blur-xl"
         style={{ background: 'var(--reader-chrome)', borderColor: 'var(--reader-rule)' }}
       >
         <div className="acu-no-drag flex items-center gap-1.5">
@@ -499,7 +499,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
               {isTocOpen && (
                 <div
-                  className="menu left-0 top-full mt-1.5 flex max-h-[65vh] w-80 flex-col overflow-hidden p-2"
+                  className="menu left-0 top-full mt-1.5 flex max-h-[65vh] w-80 flex-col overflow-hidden p-2 z-50 shadow-2xl"
                   style={{ '--menu-origin': 'top left' } as React.CSSProperties}
                   role="dialog"
                   aria-label="Contents and Bookmarks"
@@ -668,7 +668,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
             {isAppearanceOpen && (
               <div
-                className="menu right-0 top-full mt-1.5 w-64 space-y-3 p-3"
+                className="menu right-0 top-full mt-1.5 w-64 space-y-3 p-3 z-50 shadow-2xl"
                 style={{ '--menu-origin': 'top right' } as React.CSSProperties}
               >
                 <Section label="Theme">
@@ -812,7 +812,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       <main
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 select-text overflow-y-auto px-6 py-10"
+        className="relative z-10 flex-1 select-text overflow-y-auto px-6 py-10"
         style={{ scrollbarGutter: 'stable both-edges' }}
       >
         {status === 'loading' && <ReaderSkeleton title={item.title} />}
