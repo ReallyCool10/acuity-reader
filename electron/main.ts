@@ -18,6 +18,8 @@ import crypto from 'node:crypto';
 import * as mm from 'music-metadata';
 import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
+import { computeStableId, migrateLibraryState } from './id';
+import { pairCompanions } from './pairing';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,6 +39,18 @@ function logError(scope: string, err: unknown) {
     fs.appendFileSync(
       path.join(app.getPath('userData'), 'acuity-main.log'),
       `[${new Date().toISOString()}] ${scope}: ${detail}\n`
+    );
+  } catch {
+    // Logging must never take the app down.
+  }
+}
+
+function logInfo(scope: string, message: string) {
+  console.log(`[${scope}] ${message}`);
+  try {
+    fs.appendFileSync(
+      path.join(app.getPath('userData'), 'acuity-main.log'),
+      `[${new Date().toISOString()}] INFO [${scope}]: ${message}\n`
     );
   } catch {
     // Logging must never take the app down.
@@ -525,6 +539,9 @@ interface ScannedItem {
   coverUrl?: string;
 }
 
+/** In-memory cache of scanned items to avoid re-parsing tags and covers on rescan. */
+const itemMetadataCache = new Map<string, ScannedItem>();
+
 async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: (count: number) => void) {
   let entries: fs.Dirent[];
   try {
@@ -550,6 +567,22 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
 
     try {
       const stats = await fs.promises.stat(fullPath);
+
+      // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
+      const cached = itemMetadataCache.get(fullPath);
+      if (
+        cached &&
+        cached.fileSize === stats.size &&
+        Math.abs(cached.dateAdded - stats.mtimeMs) < 1000
+      ) {
+        items.push({
+          ...cached,
+          dateAdded: stats.mtimeMs,
+        });
+        onProgress(items.length);
+        continue;
+      }
+
       const parentDirName = path.basename(dirPath);
       const fromName = cleanTitle(entry.name);
 
@@ -575,10 +608,13 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         if (meta.author) author = meta.author;
       }
 
-      items.push({
-        id: Buffer.from(fullPath).toString('base64'),
+      const finalAuthor = author || parentDirName || 'Unknown';
+      const id = computeStableId(title, finalAuthor, stats.size, fullPath);
+
+      const scannedItem: ScannedItem = {
+        id,
         title,
-        author: author || parentDirName || 'Unknown',
+        author: finalAuthor,
         filePath: fullPath,
         mediaType,
         format: ext.replace('.', ''),
@@ -587,8 +623,10 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         dirName: parentDirName,
         durationSeconds,
         coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name),
-      });
+      };
 
+      itemMetadataCache.set(fullPath, scannedItem);
+      items.push(scannedItem);
       onProgress(items.length);
     } catch (err) {
       logError('scan-file', err);
@@ -612,25 +650,8 @@ ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
     }
   });
 
-  // Pair audio and text editions that normalise to the same title.
-  const byTitle = new Map<string, ScannedItem[]>();
-  for (const item of items) {
-    const key = (item.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (!key) continue;
-    if (!byTitle.has(key)) byTitle.set(key, []);
-    byTitle.get(key)!.push(item);
-  }
-
-  for (const group of byTitle.values()) {
-    const audioItem = group.find((i) => i.mediaType === 'audio');
-    const bookItem = group.find((i) => i.mediaType === 'book');
-    if (audioItem && bookItem) {
-      audioItem.companionPath = bookItem.filePath;
-      audioItem.companionType = bookItem.format;
-      bookItem.companionPath = audioItem.filePath;
-      bookItem.companionType = audioItem.format;
-    }
-  }
+  // Pair companion audio and text editions.
+  pairCompanions(items);
 
   return items;
 });
@@ -678,9 +699,19 @@ ipcMain.handle('storage:load', async () => {
     const filePath = getStorageFilePath();
     if (fs.existsSync(filePath)) {
       const parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
-      for (const folder of parsed?.folders ?? []) registerAllowedRoot(folder);
+      const { state: migrated, migratedCount } = migrateLibraryState(parsed);
+      if (migratedCount > 0) {
+        logInfo('storage-migrate', `Migrated ${migratedCount} legacy library items to stable IDs`);
+        void writeStoreAtomically(migrated);
+      }
+      for (const item of (migrated.items || []) as ScannedItem[]) {
+        if (item.filePath) {
+          itemMetadataCache.set(item.filePath, item);
+        }
+      }
+      for (const folder of migrated?.folders ?? []) registerAllowedRoot(folder);
       registerAllowedRoot(getCoversDir());
-      return parsed;
+      return migrated;
     }
   } catch (err) {
     logError('storage-load', err);
@@ -696,8 +727,13 @@ ipcMain.handle('storage:load', async () => {
  * means steady listening costs one write per second instead of one per
  * `timeupdate` event, each of which serialises the whole library.
  */
-ipcMain.handle('storage:save', async (_event, data: { folders?: string[] }) => {
+ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }) => {
   for (const folder of data?.folders ?? []) registerAllowedRoot(folder);
+  for (const item of data?.items ?? []) {
+    if (item.filePath) {
+      itemMetadataCache.set(item.filePath, item);
+    }
+  }
 
   pendingWrite = data;
   if (!writeTimer) {

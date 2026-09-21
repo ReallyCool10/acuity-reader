@@ -273,6 +273,9 @@ export async function parseEpub(data: ArrayBuffer | Uint8Array): Promise<EpubBoo
   const imageCache = new Map<string, string>();
   const chapters: EpubChapter[] = [];
 
+  const startTime = typeof performance !== 'undefined' ? performance.now() : 0;
+  let lastYieldTime = startTime;
+
   const spineRefs = Array.from(opfDoc.querySelectorAll('spine > itemref'));
   for (const ref of spineRefs) {
     // linear="no" marks ancillary material (covers, ads); keep it out of reading order.
@@ -284,6 +287,13 @@ export async function parseEpub(data: ArrayBuffer | Uint8Array): Promise<EpubBoo
     const chapterPath = resolveHref(opfDir, entryMeta.href);
     const entry = findEntry(zip, chapterPath);
     if (!entry) continue;
+
+    // Yield control to the event loop if parsing has taken more than 50ms,
+    // keeping the renderer thread responsive and preventing UI freeze on large books.
+    if (startTime && performance.now() - lastYieldTime > 50) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      lastYieldTime = performance.now();
+    }
 
     const doc = new DOMParser().parseFromString(await entry.async('text'), 'text/html');
     const html = await sanitiseChapter(zip, doc, dirOf(chapterPath), imageCache);
@@ -307,6 +317,13 @@ export async function parseEpub(data: ArrayBuffer | Uint8Array): Promise<EpubBoo
 
   const metaTitle = readDublinCore(opfDoc, 'title');
   const metaAuthor = readDublinCore(opfDoc, 'creator');
+
+  if (startTime) {
+    const elapsed = Math.round(performance.now() - startTime);
+    if (elapsed > 300) {
+      console.info(`[Epub] Parsed "${metaTitle || 'EPUB'}" (${chapters.length} chapters) in ${elapsed}ms`);
+    }
+  }
 
   return {
     title: metaTitle || '',

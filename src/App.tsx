@@ -7,6 +7,7 @@ import { BookCard } from './components/BookCard';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { ReaderView } from './components/ReaderView';
 import { SettingsModal } from './components/SettingsModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import type { Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
@@ -393,23 +394,30 @@ export default function App() {
       )}
 
       {activeBookItem && (
-        <ReaderView
-          key={activeBookItem.id}
-          item={activeBookItem}
-          initialProgress={library.progress[activeBookItem.id]}
-          onClose={() => setActiveBookItem(null)}
-          onProgressUpdate={handleBookProgress}
-          onAddBookmark={(itemId, chapterIndex, excerpt) =>
-            addBookmark(itemId, chapterIndex, `Chapter ${chapterIndex + 1}`, excerpt)
-          }
-          onSwitchToAudio={(companionPath) => {
-            const companion = findByPath(companionPath);
-            if (companion) {
-              setActiveAudioItem(companion);
-              setActiveBookItem(null);
+        <ErrorBoundary
+          fallbackTitle="Could not display book"
+          fallbackMessage="An unexpected render error occurred while viewing this book."
+          onReset={() => setActiveBookItem(null)}
+          actionLabel="Return to Library"
+        >
+          <ReaderView
+            key={activeBookItem.id}
+            item={activeBookItem}
+            initialProgress={library.progress[activeBookItem.id]}
+            onClose={() => setActiveBookItem(null)}
+            onProgressUpdate={handleBookProgress}
+            onAddBookmark={(itemId, chapterIndex, excerpt) =>
+              addBookmark(itemId, chapterIndex, `Chapter ${chapterIndex + 1}`, excerpt)
             }
-          }}
-        />
+            onSwitchToAudio={(companionPath) => {
+              const companion = findByPath(companionPath);
+              if (companion) {
+                setActiveAudioItem(companion);
+                setActiveBookItem(null);
+              }
+            }}
+          />
+        </ErrorBoundary>
       )}
 
       <SettingsModal
