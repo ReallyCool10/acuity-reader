@@ -217,11 +217,13 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
         const reqId = crypto.randomUUID().replace(/-/g, '');
         const escaped = escapeXml(text);
         const locale = voiceName.split('-').slice(0, 2).join('-');
+        // Convert paragraph and heading structural breaks into natural speech pauses
+        const ssmlBody = escaped.replace(/\n\n+/g, '<break time="550ms" />\n');
         const ssml =
           `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="${locale}">` +
           `<voice name="${voiceName}">` +
           `<prosody pitch="${pitchStr}" rate="${rateStr}">` +
-          `${escaped}` +
+          `${ssmlBody}` +
           `</prosody></voice></speak>`;
 
         const ssmlMsg = `X-RequestId:${reqId}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:${new Date().toUTCString()}Z\r\nPath:ssml\r\n\r\n${ssml}`;

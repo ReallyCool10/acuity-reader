@@ -61,6 +61,59 @@ describe('src/lib/narration - splitNarrationChunks', () => {
       expect(text.slice(chunk.startChar, chunk.endChar).trim()).toBe(chunk.text);
     }
   });
+
+  it('respects character offset when slicing from a mid-point', async () => {
+    const { splitNarrationChunks } = await import('./narration');
+    const text = 'Sentence one. Sentence two.';
+    const chunks = splitNarrationChunks(text, 100, 50);
+    expect(chunks[0].startChar).toBe(50);
+    expect(chunks[0].endChar).toBe(50 + text.length);
+  });
+});
+
+describe('src/lib/narration - buildNarrationMap & rangeFor', () => {
+  it('inserts terminal punctuation and double newlines after headings without periods', async () => {
+    const { buildNarrationMap, sentenceBoundsAt, rangeFor } = await import('./narration');
+    const container = document.createElement('div');
+    container.innerHTML = '<h1>Chapter 1 Introduction</h1><p>It was a dark and stormy night.</p>';
+    document.body.appendChild(container);
+
+    const map = buildNarrationMap(container);
+    expect(map.text).toContain('Chapter 1 Introduction.\n\nIt was a dark and stormy night.');
+
+    // Heading should be isolated as sentence 1
+    const bounds1 = sentenceBoundsAt(map.text, 5);
+    expect(map.text.slice(bounds1.start, bounds1.end).trim()).toBe('Chapter 1 Introduction.');
+
+    // Paragraph should be isolated as sentence 2
+    const bounds2 = sentenceBoundsAt(map.text, map.text.indexOf('dark'));
+    expect(map.text.slice(bounds2.start, bounds2.end).trim()).toBe('It was a dark and stormy night.');
+
+    // Range for sentence 1 should successfully map to the H1 text node
+    const range1 = rangeFor(map, bounds1.start, bounds1.end);
+    expect(range1).not.toBeNull();
+    expect(range1?.toString()).toBe('Chapter 1 Introduction');
+
+    // Range for sentence 2 should map to the P text node
+    const range2 = rangeFor(map, bounds2.start, bounds2.end);
+    expect(range2).not.toBeNull();
+    expect(range2?.toString()).toBe('It was a dark and stormy night.');
+
+    document.body.removeChild(container);
+  });
+
+  it('preserves existing terminal punctuation on headings', async () => {
+    const { buildNarrationMap } = await import('./narration');
+    const container = document.createElement('div');
+    container.innerHTML = '<h2>Where to Go Next?</h2><p>The road forks.</p>';
+    document.body.appendChild(container);
+
+    const map = buildNarrationMap(container);
+    // Should NOT have 'Next?.'
+    expect(map.text).toContain('Where to Go Next?\n\nThe road forks.');
+
+    document.body.removeChild(container);
+  });
 });
 
 describe('src/lib/narration - base64ToBlobUrl', () => {
