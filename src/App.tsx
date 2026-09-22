@@ -26,8 +26,14 @@ export default function App() {
   const [sortKey, setSortKey] = usePersistentState<SortKey>('acuity.sortKey', 'recent');
   const [appTheme, setAppTheme] = usePersistentState<AppTheme>('acuity.app.theme', 'system');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'theme' | 'folders' | 'mcp'>('folders');
   const [isScanning, setIsScanning] = useState(false);
   const [scanCount, setScanCount] = useState(0);
+
+  const handleOpenSettings = (tab: 'theme' | 'folders' | 'mcp' = 'folders') => {
+    setSettingsTab(tab);
+    setIsSettingsOpen(true);
+  };
 
   const [activeAudioItem, setActiveAudioItem] = useState<MediaItem | null>(null);
   const [activeBookItem, setActiveBookItem] = useState<MediaItem | null>(null);
@@ -390,7 +396,7 @@ export default function App() {
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-base)] backdrop-blur-3xl">
       <TitleBarControls
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={handleOpenSettings}
         onRescan={() => void scanFolders(library.folders)}
         isScanning={isScanning}
         scanCount={scanCount}
@@ -514,6 +520,7 @@ export default function App() {
 
       <SettingsModal
         isOpen={isSettingsOpen}
+        initialTab={settingsTab}
         onClose={() => setIsSettingsOpen(false)}
         appTheme={appTheme}
         onThemeChange={setAppTheme}

@@ -76,11 +76,13 @@ describe('TitleBarControls', () => {
       settingsBtn?.click();
     });
 
-    // Menu should now be open with all three embedded items
+    // Menu should now be open with embedded items
     const menu = container.querySelector('[role="menu"]');
     expect(menu).not.toBeNull();
     expect(menu?.textContent).toContain('Rescan library');
+    expect(menu?.textContent).toContain('Theme & appearance');
     expect(menu?.textContent).toContain('Library folders');
+    expect(menu?.textContent).toContain('AI & MCP integration');
     expect(menu?.textContent).toContain('Keep window on top');
 
     // Clicking Rescan Library
@@ -95,6 +97,21 @@ describe('TitleBarControls', () => {
     expect(onRescan).toHaveBeenCalledTimes(1);
     expect(container.querySelector('[role="menu"]')).toBeNull();
 
+    // Re-open and click Theme & appearance
+    await act(async () => {
+      settingsBtn?.click();
+    });
+    const themeItem = Array.from(container.querySelectorAll<HTMLButtonElement>('.menu-item')).find(
+      (btn) => btn.textContent?.includes('Theme & appearance')
+    );
+    expect(themeItem).toBeDefined();
+
+    await act(async () => {
+      themeItem?.click();
+    });
+    expect(onOpenSettings).toHaveBeenCalledWith('theme');
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+
     // Re-open and click Library Folders
     await act(async () => {
       settingsBtn?.click();
@@ -107,7 +124,22 @@ describe('TitleBarControls', () => {
     await act(async () => {
       foldersItem?.click();
     });
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith('folders');
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+
+    // Re-open and click AI & MCP
+    await act(async () => {
+      settingsBtn?.click();
+    });
+    const mcpItem = Array.from(container.querySelectorAll<HTMLButtonElement>('.menu-item')).find(
+      (btn) => btn.textContent?.includes('AI & MCP integration')
+    );
+    expect(mcpItem).toBeDefined();
+
+    await act(async () => {
+      mcpItem?.click();
+    });
+    expect(onOpenSettings).toHaveBeenCalledWith('mcp');
     expect(container.querySelector('[role="menu"]')).toBeNull();
 
     // Re-open and toggle pin

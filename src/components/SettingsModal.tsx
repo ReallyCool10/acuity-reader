@@ -3,10 +3,12 @@ import {
   Bot,
   Check,
   Copy,
+  FolderOpen,
   FolderPlus,
   Laptop,
   Loader2,
   Moon,
+  Palette,
   RefreshCw,
   Sparkles,
   Sun,
@@ -15,8 +17,11 @@ import {
 } from 'lucide-react';
 import type { AppTheme, McpClientInfo } from '../types';
 
+export type SettingsTab = 'theme' | 'folders' | 'mcp';
+
 interface SettingsModalProps {
   isOpen: boolean;
+  initialTab?: SettingsTab;
   onClose: () => void;
   appTheme: AppTheme;
   onThemeChange: (theme: AppTheme) => void;
@@ -32,6 +37,7 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
+  initialTab = 'folders',
   onClose,
   appTheme,
   onThemeChange,
@@ -44,7 +50,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   booksCount,
   audioCount,
 }) => {
-  const [activeTab, setActiveTab] = useState<'general' | 'mcp'>('general');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
   const [mcpClients, setMcpClients] = useState<McpClientInfo[]>([]);
   const [loadingClients, setLoadingClients] = useState(false);
   const [actionClientId, setActionClientId] = useState<string | null>(null);
@@ -55,6 +61,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+
+  /* Synchronize activeTab when initialTab or isOpen updates */
+  useEffect(() => {
+    if (isOpen && initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   /* Minimal focus management */
   useEffect(() => {
@@ -97,7 +110,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     };
   }, [isOpen, onClose]);
 
-  // Load MCP clients when modal opens or tab changes
+  // Load MCP clients when modal opens or tab changes to mcp
   useEffect(() => {
     if (!isOpen || activeTab !== 'mcp') return;
 
@@ -222,14 +235,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex border-b border-[var(--stroke-subtle)] bg-[var(--surface-sunken)]/40 px-5">
           <button
             type="button"
-            onClick={() => setActiveTab('general')}
-            className={`border-b-2 py-2.5 px-3 text-[12px] font-medium transition-all ${
-              activeTab === 'general'
+            onClick={() => setActiveTab('theme')}
+            className={`flex items-center gap-1.5 border-b-2 py-2.5 px-3 text-[12px] font-medium transition-all ${
+              activeTab === 'theme'
                 ? 'border-[var(--accent)] font-semibold text-[var(--accent)]'
                 : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
             }`}
           >
-            General & Folders
+            <Palette className="h-3.5 w-3.5" />
+            Theme
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('folders')}
+            className={`flex items-center gap-1.5 border-b-2 py-2.5 px-3 text-[12px] font-medium transition-all ${
+              activeTab === 'folders'
+                ? 'border-[var(--accent)] font-semibold text-[var(--accent)]'
+                : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <FolderOpen className="h-3.5 w-3.5" />
+            Library Folders
           </button>
           <button
             type="button"
@@ -241,50 +267,100 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             }`}
           >
             <Bot className="h-3.5 w-3.5" />
-            AI & MCP Integration
+            AI & MCP
           </button>
         </div>
 
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-5">
-          {activeTab === 'general' ? (
-            <div className="space-y-5">
-              {/* Appearance Section */}
-              <div className="space-y-2">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
-                  Appearance
+          {/* TAB 1: INDEPENDENT THEME SELECTION CARD */}
+          {activeTab === 'theme' && (
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <h3 className="text-[12.5px] font-semibold text-[var(--text-primary)]">
+                  Appearance Theme
                 </h3>
-                <div className="flex gap-2">
-                  {[
-                    { key: 'system' as const, label: 'System', icon: Laptop },
-                    { key: 'dark' as const, label: 'Dark', icon: Moon },
-                    { key: 'light' as const, label: 'Light', icon: Sun },
-                  ].map(({ key, label, icon: Icon }) => (
+                <p className="text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+                  Choose your application appearance. Acuity adapts seamlessly to Windows 11 Mica acrylic material and your desktop accent color.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2.5 pt-1">
+                {[
+                  { key: 'system' as const, label: 'System', description: 'Follow Windows', icon: Laptop },
+                  { key: 'dark' as const, label: 'Dark', description: 'Deep Mica acrylic', icon: Moon },
+                  { key: 'light' as const, label: 'Light', description: 'Clean paper white', icon: Sun },
+                ].map(({ key, label, description, icon: Icon }) => {
+                  const isSelected = appTheme === key;
+                  return (
                     <button
                       key={key}
                       type="button"
                       onClick={() => onThemeChange(key)}
-                      aria-pressed={appTheme === key}
-                      className={`flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-md)] border py-2 text-[12px] font-medium transition-all duration-150 ${
-                        appTheme === key
-                          ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] font-semibold text-[var(--accent)] shadow-sm'
-                          : 'border-[var(--stroke-subtle)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
+                      aria-pressed={isSelected}
+                      className={`flex flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] border p-3.5 text-center transition-all duration-150 ${
+                        isSelected
+                          ? 'border-[var(--accent)] bg-[var(--accent-muted)]/50 shadow-sm ring-1 ring-[var(--accent)]'
+                          : 'border-[var(--stroke-subtle)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:border-[var(--stroke-default)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
                       }`}
                     >
-                      <Icon className="h-3.5 w-3.5" />
-                      {label}
+                      <div
+                        className={`flex h-8 w-8 items-center justify-center rounded-full ${
+                          isSelected
+                            ? 'bg-[var(--accent)] text-white'
+                            : 'bg-[var(--surface-sunken)] text-[var(--text-secondary)]'
+                        }`}
+                      >
+                        <Icon className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p
+                          className={`text-[12px] font-semibold ${
+                            isSelected ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+                          }`}
+                        >
+                          {label}
+                        </p>
+                        <p className="mt-0.5 text-[10px] text-[var(--text-tertiary)]">{description}</p>
+                      </div>
                     </button>
-                  ))}
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-[var(--stroke-subtle)] pt-3">
+                <div className="rounded-[var(--radius-md)] border border-[var(--stroke-subtle)] bg-[var(--surface-raised)] p-3 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11.5px] font-medium text-[var(--text-primary)]">
+                      Windows 11 Mica Material
+                    </span>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
+                      <Check className="h-2.5 w-2.5" />
+                      Hardware Accelerated
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+                    Translucency dynamically samples your desktop wallpaper behind the app through the DWM compositor for native depth.
+                  </p>
                 </div>
               </div>
 
-              <div className="border-t border-[var(--stroke-subtle)]" />
+              <p className="text-[10.5px] leading-relaxed text-[var(--text-tertiary)]">
+                Note: In-reader reading themes (Dark, Sepia, Light, Inverted) are also independently accessible inside book reading mode via the Reader toolbar.
+              </p>
+            </div>
+          )}
 
-              {/* Library Folders Section */}
-              <div className="space-y-2">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+          {/* TAB 2: INDEPENDENT LIBRARY FOLDERS CARD */}
+          {activeTab === 'folders' && (
+            <div className="space-y-5">
+              <div className="space-y-1">
+                <h3 className="text-[12.5px] font-semibold text-[var(--text-primary)]">
                   Library Folders
                 </h3>
+                <p className="text-[11.5px] leading-relaxed text-[var(--text-secondary)]">
+                  Manage the directories Acuity monitors for books, EPUBs, PDFs, and audiobooks.
+                </p>
               </div>
 
               <div className="grid grid-cols-3 gap-2">
@@ -369,7 +445,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 tags where present, or from a matching image beside the file.
               </p>
             </div>
-          ) : (
+          )}
+
+          {/* TAB 3: INDEPENDENT AI & MCP INTEGRATION CARD */}
+          {activeTab === 'mcp' && (
             <div className="space-y-5">
               {/* MCP Overview */}
               <div className="rounded-[var(--radius-md)] border border-[var(--accent-ring)]/40 bg-[var(--accent-muted)]/30 p-3.5">

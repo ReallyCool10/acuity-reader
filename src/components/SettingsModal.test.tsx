@@ -17,6 +17,7 @@ describe('SettingsModal', () => {
 
   const defaultProps = {
     isOpen: true,
+    initialTab: 'folders' as const,
     onClose: vi.fn(),
     appTheme: 'system' as const,
     onThemeChange: vi.fn(),
@@ -30,18 +31,15 @@ describe('SettingsModal', () => {
     audioCount: 22,
   };
 
-  it('renders stats, watched folders, and appearance theme buttons', async () => {
+  it('renders independent theme selection card when initialTab="theme"', async () => {
     const root = createRoot(container);
     await act(async () => {
-      root.render(<SettingsModal {...defaultProps} />);
+      root.render(<SettingsModal {...defaultProps} initialTab="theme" />);
     });
 
     expect(container.textContent).toContain('Settings');
-    expect(container.textContent).toContain('Appearance');
-    expect(container.textContent).toContain('Library Folders');
-    expect(container.textContent).toContain('42');
-    expect(container.textContent).toContain('C:/Books');
-    expect(container.textContent).toContain('D:/Audiobooks');
+    expect(container.textContent).toContain('Appearance Theme');
+    expect(container.textContent).toContain('Windows 11 Mica Material');
 
     // Theme buttons: System, Dark, Light
     const systemBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('System'));
@@ -63,7 +61,7 @@ describe('SettingsModal', () => {
     const onThemeChange = vi.fn();
     const root = createRoot(container);
     await act(async () => {
-      root.render(<SettingsModal {...defaultProps} onThemeChange={onThemeChange} />);
+      root.render(<SettingsModal {...defaultProps} initialTab="theme" onThemeChange={onThemeChange} />);
     });
 
     const darkBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Dark'));
@@ -85,7 +83,7 @@ describe('SettingsModal', () => {
     });
   });
 
-  it('handles folder removal and add folder actions', async () => {
+  it('renders stats, watched folders, and handles folder actions when on folders tab', async () => {
     const onRemoveFolder = vi.fn();
     const onAddFolder = vi.fn();
     const root = createRoot(container);
@@ -93,11 +91,17 @@ describe('SettingsModal', () => {
       root.render(
         <SettingsModal
           {...defaultProps}
+          initialTab="folders"
           onRemoveFolder={onRemoveFolder}
           onAddFolder={onAddFolder}
         />
       );
     });
+
+    expect(container.textContent).toContain('Library Folders');
+    expect(container.textContent).toContain('42');
+    expect(container.textContent).toContain('C:/Books');
+    expect(container.textContent).toContain('D:/Audiobooks');
 
     const removeBtn = container.querySelector('button[aria-label="Stop watching C:/Books"]') as HTMLButtonElement;
     expect(removeBtn).toBeDefined();
@@ -112,6 +116,44 @@ describe('SettingsModal', () => {
       addBtn?.click();
     });
     expect(onAddFolder).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('allows navigating between Theme, Library Folders, and AI & MCP tabs', async () => {
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<SettingsModal {...defaultProps} initialTab="folders" />);
+    });
+
+    expect(container.textContent).toContain('Library Folders');
+
+    // Click Theme tab
+    const themeTabBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.trim() === 'Theme'
+    );
+    expect(themeTabBtn).toBeDefined();
+
+    await act(async () => {
+      themeTabBtn?.click();
+    });
+
+    expect(container.textContent).toContain('Appearance Theme');
+    expect(container.textContent).toContain('Windows 11 Mica Material');
+
+    // Click Folders tab
+    const foldersTabBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('Library Folders')
+    );
+    expect(foldersTabBtn).toBeDefined();
+
+    await act(async () => {
+      foldersTabBtn?.click();
+    });
+
+    expect(container.textContent).toContain('C:/Books');
 
     await act(async () => {
       root.unmount();
@@ -165,7 +207,7 @@ describe('SettingsModal', () => {
 
     const root = createRoot(container);
     await act(async () => {
-      root.render(<SettingsModal {...defaultProps} />);
+      root.render(<SettingsModal {...defaultProps} initialTab="folders" />);
     });
 
     // Click on AI & MCP tab

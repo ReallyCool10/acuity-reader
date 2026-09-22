@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Check, FolderOpen, Loader2, Pin, PinOff, RefreshCw, Settings } from 'lucide-react';
+import { Bot, Check, FolderOpen, Loader2, Palette, Pin, PinOff, RefreshCw, Settings } from 'lucide-react';
 import { AcuityLogo } from './AcuityLogo';
 import { useDismissable } from '../hooks/useDismissable';
 
 interface TitleBarControlsProps {
-  onOpenSettings: () => void;
+  onOpenSettings: (tab?: 'theme' | 'folders' | 'mcp') => void;
   onRescan: () => void;
   isScanning: boolean;
   scanCount: number;
@@ -100,11 +100,28 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
               </div>
             </button>
 
+            <div className="my-1 border-t border-[var(--stroke-subtle)]" />
+
             <button
               type="button"
               role="menuitem"
               onClick={() => {
-                onOpenSettings();
+                onOpenSettings('theme');
+                setIsMenuOpen(false);
+              }}
+              className="menu-item"
+            >
+              <div className="flex items-center gap-2.5">
+                <Palette className="h-3.5 w-3.5" />
+                <span>Theme & appearance</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onOpenSettings('folders');
                 setIsMenuOpen(false);
               }}
               className="menu-item"
@@ -112,6 +129,21 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
               <div className="flex items-center gap-2.5">
                 <FolderOpen className="h-3.5 w-3.5" />
                 <span>Library folders</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onOpenSettings('mcp');
+                setIsMenuOpen(false);
+              }}
+              className="menu-item"
+            >
+              <div className="flex items-center gap-2.5">
+                <Bot className="h-3.5 w-3.5" />
+                <span>AI & MCP integration</span>
               </div>
             </button>
 
