@@ -185,7 +185,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   const reportProgress = useThrottledCallback(
     (page: number, numPages: number, scrollY: number) => {
-      const percent = numPages > 0 ? page / numPages : 0;
+      const percent = numPages > 0 ? (page / numPages) * 100 : 0;
       onProgressUpdate(item.id, page - 1, percent, scrollY);
     },
     250

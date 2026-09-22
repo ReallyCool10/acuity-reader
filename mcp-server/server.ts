@@ -7,8 +7,11 @@ import {
   updateReadingProgress,
   listBookmarks,
   addBookmark,
+  updateBookmark,
   deleteBookmark,
+  getCurrentlyReading,
   getLibraryStats,
+  exportReadingSummaryMarkdown,
 } from './storage';
 import {
   getEpubChapterList,
@@ -218,7 +221,32 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 4: update_reading_progress
+  // Tool 4: get_currently_reading
+  server.tool(
+    'get_currently_reading',
+    'Get all books and audiobooks that are actively in-progress, ordered by most recently opened, with bookmarks and companion info.',
+    {},
+    async () => {
+      try {
+        const currentlyReading = await getCurrentlyReading(customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(currentlyReading, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to get currently reading books: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 5: update_reading_progress
   server.tool(
     'update_reading_progress',
     'Update reading or audio progress for a book in Acuity Reader.',
@@ -248,7 +276,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 5: list_bookmarks
+  // Tool 6: list_bookmarks
   server.tool(
     'list_bookmarks',
     'List bookmarks, excerpts, and notes for a specific book, or across the entire library.',
@@ -275,7 +303,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 6: add_bookmark
+  // Tool 7: add_bookmark
   server.tool(
     'add_bookmark',
     'Add a new bookmark, note, or excerpt to a book in Acuity Reader.',
@@ -306,7 +334,44 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 7: delete_bookmark
+  // Tool 8: update_bookmark
+  server.tool(
+    'update_bookmark',
+    'Update the label, note, or excerpt of an existing bookmark in Acuity Reader.',
+    {
+      bookId: z.string().describe('ID of the book'),
+      bookmarkId: z.string().describe('ID of the bookmark to update'),
+      label: z.string().optional().describe('New label for the bookmark'),
+      excerpt: z.string().optional().describe('Updated excerpt or quote'),
+      note: z.string().optional().describe('Updated personal note, analysis, or comment'),
+    },
+    async ({ bookId, bookmarkId, label, excerpt, note }) => {
+      try {
+        const updated = await updateBookmark(bookId, bookmarkId, { label, excerpt, note }, customStoragePath);
+        if (!updated) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Bookmark "${bookmarkId}" not found for book "${bookId}".` }],
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success: true, updatedBookmark: updated }, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to update bookmark: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 9: delete_bookmark
   server.tool(
     'delete_bookmark',
     'Delete a bookmark from a book in Acuity Reader.',
@@ -334,7 +399,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 8: get_table_of_contents
+  // Tool 10: get_table_of_contents
   server.tool(
     'get_table_of_contents',
     'Inspect the table of contents / chapter list of an EPUB or PDF book.',
@@ -389,17 +454,19 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 9: read_book_content
+  // Tool 11: read_book_content
   server.tool(
     'read_book_content',
-    'Read plain-text chapter content (EPUB) or page content (PDF) from a book in the library.',
+    'Read plain-text chapter content (EPUB) or page content (PDF) from a book in the library. Supports reading single chapters/pages or a range.',
     {
       book: z.string().describe('Book ID or title'),
-      chapterIndex: z.number().int().min(0).optional().describe('0-based chapter index for EPUB books (defaults to current reading progress or chapter 0)'),
-      pageNumber: z.number().int().min(1).optional().describe('1-based page number for PDF books (defaults to 1)'),
-      maxCharacters: z.number().int().min(500).max(50000).optional().default(8000).describe('Max character count to return (default: 8000)'),
+      chapterIndex: z.number().int().min(0).optional().describe('0-based starting chapter index for EPUB books (defaults to current reading progress or chapter 0)'),
+      endChapterIndex: z.number().int().min(0).optional().describe('Optional 0-based ending chapter index to read multiple consecutive chapters'),
+      pageNumber: z.number().int().min(1).optional().describe('1-based starting page number for PDF books (defaults to 1)'),
+      endPageNumber: z.number().int().min(1).optional().describe('Optional 1-based ending page number to read a range of PDF pages'),
+      maxCharacters: z.number().int().min(500).max(50000).optional().default(10000).describe('Max character count to return (default: 10000)'),
     },
-    async ({ book, chapterIndex, pageNumber, maxCharacters }) => {
+    async ({ book, chapterIndex, endChapterIndex, pageNumber, endPageNumber, maxCharacters }) => {
       try {
         const itemWithContext = await getBook(book, customStoragePath);
         if (!itemWithContext) {
@@ -414,7 +481,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
 
         if (fmt === 'epub') {
           const targetIndex = chapterIndex !== undefined ? chapterIndex : progress?.chapterIndex ?? 0;
-          const chapterData = await readEpubChapterText(item.filePath, targetIndex, maxCharacters);
+          const chapterData = await readEpubChapterText(item.filePath, targetIndex, maxCharacters, endChapterIndex);
           return {
             content: [
               {
@@ -425,7 +492,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
           };
         } else if (fmt === 'pdf') {
           const targetPage = pageNumber !== undefined ? pageNumber : (progress?.chapterIndex ?? 0) + 1;
-          const pageData = await readPdfPageText(item.filePath, targetPage, maxCharacters);
+          const pageData = await readPdfPageText(item.filePath, targetPage, maxCharacters, endPageNumber);
           return {
             content: [
               {
@@ -449,7 +516,7 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
     }
   );
 
-  // Tool 10: search_book_content
+  // Tool 12: search_book_content
   server.tool(
     'search_book_content',
     'Perform full-text search across all chapters of an EPUB or pages of a PDF book and return matched snippets.',
@@ -501,6 +568,56 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Search failed: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 13: get_library_stats
+  server.tool(
+    'get_library_stats',
+    'Get overall statistics about the Acuity library (counts by format, active reading count, bookmark count, and watched folders).',
+    {},
+    async () => {
+      try {
+        const stats = await getLibraryStats(customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(stats, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to get library stats: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 14: export_reading_summary
+  server.tool(
+    'export_reading_summary',
+    'Generate a complete Markdown reading digest summarizing active books, progress bars, recent bookmarks, and quotes.',
+    {},
+    async () => {
+      try {
+        const markdown = await exportReadingSummaryMarkdown(customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: markdown,
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to export reading summary: ${err instanceof Error ? err.message : String(err)}` }],
         };
       }
     }

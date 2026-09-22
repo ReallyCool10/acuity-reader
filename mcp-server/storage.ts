@@ -112,7 +112,9 @@ export async function listBooks(
   if (filter.inProgressOnly) {
     items = items.filter((item) => {
       const prog = state.progress[item.id];
-      return prog && prog.percent > 0 && prog.percent < 0.995;
+      if (!prog) return false;
+      const pct = normalizePercent(prog.percent);
+      return pct > 0 && pct < 99.5;
     });
   }
 
@@ -206,7 +208,7 @@ export async function getReadingProgress(
         author: item.author,
         mediaType: item.mediaType,
         format: item.format,
-        percent: Math.round(prog.percent * 1000) / 10,
+        percent: normalizePercent(prog.percent),
         chapterIndex: prog.chapterIndex,
         currentTime: prog.currentTime,
         duration: prog.duration,
@@ -228,7 +230,7 @@ export async function getReadingProgress(
         author: item.author,
         mediaType: item.mediaType,
         format: item.format,
-        percent: Math.round(prog.percent * 1000) / 10,
+        percent: normalizePercent(prog.percent),
         chapterIndex: prog.chapterIndex,
         currentTime: prog.currentTime,
         duration: prog.duration,
@@ -262,7 +264,7 @@ export async function updateReadingProgress(
     chapterIndex: updates.chapterIndex !== undefined ? updates.chapterIndex : existing.chapterIndex,
     currentTime: updates.currentTime !== undefined ? updates.currentTime : existing.currentTime,
     chapterScroll: updates.chapterScroll !== undefined ? updates.chapterScroll : existing.chapterScroll,
-    percent: Math.min(1, Math.max(0, updates.percent > 1 ? updates.percent / 100 : updates.percent)),
+    percent: normalizePercent(updates.percent),
     lastPlayed: Date.now(),
   };
 
@@ -360,6 +362,154 @@ export async function deleteBookmark(
   return false;
 }
 
+/**
+ * Normalize percentage so values are strictly between 0 and 100.
+ * Handles both legacy 0-1 ratios (e.g. 0.35) and 0-100 percentage numbers.
+ */
+export function normalizePercent(raw: number): number {
+  if (typeof raw !== 'number' || isNaN(raw) || raw <= 0) return 0;
+  const val = raw <= 1 ? raw * 100 : raw;
+  return Math.min(100, Math.max(0, Math.round(val * 10) / 10));
+}
+
+export interface CurrentlyReadingItem extends ProgressSummary {
+  filePath: string;
+  bookmarksCount: number;
+  latestBookmark?: {
+    id: string;
+    label: string;
+    excerpt?: string;
+    note?: string;
+    position: number;
+  };
+  companionPath?: string;
+  companionType?: string;
+}
+
+/**
+ * Get all books and audiobooks actively in-progress (0% < progress < 99.5%).
+ */
+export async function getCurrentlyReading(customPath?: string): Promise<CurrentlyReadingItem[]> {
+  const state = await loadLibraryState(customPath);
+  const itemMap = new Map(state.items.map((i) => [i.id, i]));
+
+  const active = Object.entries(state.progress)
+    .map(([id, prog]) => {
+      const item = itemMap.get(id);
+      if (!item) return null;
+      const pct = normalizePercent(prog.percent);
+      if (pct <= 0 || pct >= 99.5) return null;
+
+      const bookmarks = state.bookmarks[id] || [];
+      const latestBookmark = bookmarks.length > 0 ? bookmarks[bookmarks.length - 1] : undefined;
+
+      return {
+        bookId: item.id,
+        title: item.title,
+        author: item.author,
+        mediaType: item.mediaType,
+        format: item.format,
+        filePath: item.filePath,
+        percent: pct,
+        chapterIndex: prog.chapterIndex,
+        currentTime: prog.currentTime,
+        duration: prog.duration,
+        lastPlayed: prog.lastPlayed,
+        lastPlayedFormatted: new Date(prog.lastPlayed).toISOString(),
+        bookmarksCount: bookmarks.length,
+        latestBookmark,
+        companionPath: item.companionPath,
+        companionType: item.companionType,
+      };
+    })
+    .filter((e): e is CurrentlyReadingItem => e !== null)
+    .sort((a, b) => b.lastPlayed - a.lastPlayed);
+
+  return active;
+}
+
+/**
+ * Edit an existing bookmark's label, note, or excerpt.
+ */
+export async function updateBookmark(
+  bookId: string,
+  bookmarkId: string,
+  updates: { label?: string; note?: string; excerpt?: string },
+  customPath?: string
+): Promise<Bookmark | null> {
+  const state = await loadLibraryState(customPath);
+  const list = state.bookmarks[bookId];
+  if (!list) return null;
+
+  const target = list.find((b) => b.id === bookmarkId);
+  if (!target) return null;
+
+  if (updates.label !== undefined) target.label = updates.label;
+  if (updates.note !== undefined) target.note = updates.note;
+  if (updates.excerpt !== undefined) target.excerpt = updates.excerpt;
+
+  await saveLibraryState(state, customPath);
+  return target;
+}
+
+/**
+ * Generate a complete Markdown summary of the user's reading activity.
+ */
+export async function exportReadingSummaryMarkdown(customPath?: string): Promise<string> {
+  const stats = await getLibraryStats(customPath);
+  const currentlyReading = await getCurrentlyReading(customPath);
+  const bookmarks = await listBookmarks(undefined, customPath);
+
+  const lines: string[] = [
+    `# 📚 Acuity Reader — Reading Summary`,
+    ``,
+    `*Generated on ${new Date().toLocaleDateString(undefined, { dateStyle: 'full' })}*`,
+    ``,
+    `## 📊 Library Overview`,
+    `- **Total Items**: ${stats.totalItems} (${stats.totalBooks} books, ${stats.totalAudiobooks} audiobooks)`,
+    `- **Formats**: ${Object.entries(stats.formats).map(([f, n]) => `${f.toUpperCase()} (${n})`).join(', ')}`,
+    `- **Currently In-Progress**: ${currentlyReading.length}`,
+    `- **Saved Bookmarks & Notes**: ${stats.totalBookmarks}`,
+    ``,
+    `## 📖 Currently Reading`,
+  ];
+
+  if (currentlyReading.length === 0) {
+    lines.push(`*No books currently in progress.*`);
+  } else {
+    for (const item of currentlyReading) {
+      const barFilled = Math.round(item.percent / 10);
+      const bar = '█'.repeat(barFilled) + '░'.repeat(10 - barFilled);
+      lines.push(`### ${item.title}`);
+      lines.push(`- **Author**: ${item.author}`);
+      lines.push(`- **Format**: ${item.format.toUpperCase()} (${item.mediaType})`);
+      lines.push(`- **Progress**: \`[${bar}]\` **${item.percent}%**`);
+      if (item.chapterIndex !== undefined) {
+        lines.push(`- **Current Location**: Chapter/Page ${item.chapterIndex + 1}`);
+      }
+      lines.push(`- **Last Read**: ${item.lastPlayedFormatted}`);
+      if (item.latestBookmark) {
+        lines.push(`- **Latest Note**: *"${item.latestBookmark.label}"* ${item.latestBookmark.excerpt ? `— \`${item.latestBookmark.excerpt.slice(0, 100)}\`` : ''}`);
+      }
+      lines.push(``);
+    }
+  }
+
+  lines.push(`## 🔖 Recent Notes & Bookmarks`);
+  const recentBookmarks = bookmarks.slice(0, 10);
+  if (recentBookmarks.length === 0) {
+    lines.push(`*No saved bookmarks yet.*`);
+  } else {
+    for (const bm of recentBookmarks) {
+      lines.push(`- **${bm.bookTitle}**: **${bm.label}**`);
+      if (bm.excerpt) lines.push(`  > "${bm.excerpt}"`);
+      if (bm.note) lines.push(`  *Note:* ${bm.note}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 export interface LibraryStats {
   totalItems: number;
   totalBooks: number;
@@ -388,7 +538,10 @@ export async function getLibraryStats(customPath?: string): Promise<LibraryStats
   }
 
   const activeReadingCount = Object.values(state.progress).filter(
-    (p) => p.percent > 0 && p.percent < 0.995
+    (p) => {
+      const pct = normalizePercent(p.percent);
+      return pct > 0 && pct < 99.5;
+    }
   ).length;
 
   let totalBookmarks = 0;

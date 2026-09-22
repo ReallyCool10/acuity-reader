@@ -203,13 +203,22 @@ export async function getEpubChapterList(filePath: string): Promise<{ title: str
 }
 
 /**
- * Read the text content of a specific EPUB chapter.
+ * Read the text content of a specific EPUB chapter or range of chapters.
  */
 export async function readEpubChapterText(
   filePath: string,
   chapterIndex: number,
-  maxCharacters = 10000
-): Promise<{ title: string; chapterTitle: string; chapterIndex: number; totalChapters: number; text: string; truncated: boolean }> {
+  maxCharacters = 15000,
+  endChapterIndex?: number
+): Promise<{
+  title: string;
+  chapterTitle: string;
+  chapterIndex: number;
+  endChapterIndex?: number;
+  totalChapters: number;
+  text: string;
+  truncated: boolean;
+}> {
   if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const buf = await fs.promises.readFile(filePath);
   const zip = await JSZip.loadAsync(buf);
@@ -219,23 +228,48 @@ export async function readEpubChapterText(
     throw new Error(`Invalid chapterIndex: ${chapterIndex}. Total chapters: ${meta.spineHrefs.length}`);
   }
 
-  const href = meta.spineHrefs[chapterIndex];
-  const entry = findZipEntry(zip, href);
-  if (!entry) throw new Error(`Chapter entry not found in EPUB archive: ${href}`);
+  const endIndex =
+    endChapterIndex !== undefined
+      ? Math.min(meta.spineHrefs.length - 1, Math.max(chapterIndex, endChapterIndex))
+      : chapterIndex;
 
-  const rawHtml = await entry.async('text');
-  const plainText = htmlToPlainText(rawHtml);
-  const chapterTitle = meta.tocLabels.get(href) || `Chapter ${chapterIndex + 1}`;
+  let combinedText = '';
+  let chapterTitle = '';
 
-  const truncated = plainText.length > maxCharacters;
-  const returnedText = truncated ? plainText.slice(0, maxCharacters) + '\n\n[... Chapter text truncated ...]' : plainText;
+  for (let idx = chapterIndex; idx <= endIndex; idx++) {
+    const href = meta.spineHrefs[idx];
+    const entry = findZipEntry(zip, href);
+    if (!entry) continue;
+
+    const rawHtml = await entry.async('text');
+    const plainText = htmlToPlainText(rawHtml);
+    const currTitle = meta.tocLabels.get(href) || `Chapter ${idx + 1}`;
+
+    if (idx === chapterIndex) {
+      chapterTitle = currTitle;
+    }
+
+    if (endIndex > chapterIndex) {
+      combinedText += `\n\n=== ${currTitle} (Chapter ${idx + 1}) ===\n\n` + plainText;
+    } else {
+      combinedText = plainText;
+    }
+
+    if (combinedText.length >= maxCharacters) break;
+  }
+
+  const truncated = combinedText.length > maxCharacters;
+  const returnedText = truncated
+    ? combinedText.slice(0, maxCharacters) + '\n\n[... Text truncated at maxCharacters limit ...]'
+    : combinedText;
 
   return {
     title: meta.title,
-    chapterTitle,
+    chapterTitle: endIndex > chapterIndex ? `${chapterTitle} — Chapter ${endIndex + 1}` : chapterTitle,
     chapterIndex,
+    endChapterIndex: endIndex > chapterIndex ? endIndex : undefined,
     totalChapters: meta.spineHrefs.length,
-    text: returnedText,
+    text: returnedText.trim(),
     truncated,
   };
 }
@@ -330,13 +364,20 @@ export async function getPdfInfo(filePath: string): Promise<{ title?: string; nu
 }
 
 /**
- * Read the text of a single PDF page.
+ * Read the text of a single PDF page or range of pages.
  */
 export async function readPdfPageText(
   filePath: string,
   pageNumber: number,
-  maxCharacters = 10000
-): Promise<{ title?: string; pageNumber: number; numPages: number; text: string; truncated: boolean }> {
+  maxCharacters = 15000,
+  endPageNumber?: number
+): Promise<{
+  pageNumber: number;
+  endPageNumber?: number;
+  numPages: number;
+  text: string;
+  truncated: boolean;
+}> {
   if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
   const data = new Uint8Array(await fs.promises.readFile(filePath));
   const doc = await pdfjsLib.getDocument({ data, useSystemFonts: true }).promise;
@@ -345,21 +386,41 @@ export async function readPdfPageText(
     throw new Error(`Invalid pageNumber: ${pageNumber}. Document has ${doc.numPages} pages.`);
   }
 
-  const page = await doc.getPage(pageNumber);
-  const textContent = await page.getTextContent();
-  const text = textContent.items
-    .map((item) => ('str' in item ? (item as { str: string }).str : ''))
-    .join(' ')
-    .replace(/[ \t]+/g, ' ')
-    .trim();
+  const lastPage =
+    endPageNumber !== undefined
+      ? Math.min(doc.numPages, Math.max(pageNumber, endPageNumber))
+      : pageNumber;
 
-  const truncated = text.length > maxCharacters;
-  const returnedText = truncated ? text.slice(0, maxCharacters) + '\n\n[... Page text truncated ...]' : text;
+  let combinedText = '';
+
+  for (let p = pageNumber; p <= lastPage; p++) {
+    const page = await doc.getPage(p);
+    const textContent = await page.getTextContent();
+    const pageText = textContent.items
+      .map((item) => ('str' in item ? (item as { str: string }).str : ''))
+      .join(' ')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+
+    if (lastPage > pageNumber) {
+      combinedText += `\n\n--- Page ${p} of ${doc.numPages} ---\n\n` + pageText;
+    } else {
+      combinedText = pageText;
+    }
+
+    if (combinedText.length >= maxCharacters) break;
+  }
+
+  const truncated = combinedText.length > maxCharacters;
+  const returnedText = truncated
+    ? combinedText.slice(0, maxCharacters) + '\n\n[... Text truncated at maxCharacters limit ...]'
+    : combinedText;
 
   return {
     pageNumber,
+    endPageNumber: lastPage > pageNumber ? lastPage : undefined,
     numPages: doc.numPages,
-    text: returnedText,
+    text: returnedText.trim(),
     truncated,
   };
 }

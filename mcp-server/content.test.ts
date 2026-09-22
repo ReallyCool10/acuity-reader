@@ -129,4 +129,14 @@ describe('mcp-server/content', () => {
     expect(searchRes.matches[0].snippetBefore).toContain('artificial');
     expect(searchRes.matches[0].snippetAfter).toContain('agents');
   });
+
+  it('reads a range of chapters when endChapterIndex is provided', async () => {
+    const rangeRes = await readEpubChapterText(tempEpubPath, 0, 10000, 1);
+    expect(rangeRes.chapterIndex).toBe(0);
+    expect(rangeRes.endChapterIndex).toBe(1);
+    expect(rangeRes.text).toContain('First Steps');
+    expect(rangeRes.text).toContain('Deep Dive');
+    expect(rangeRes.text).toContain('In the beginning there was a reader');
+    expect(rangeRes.text).toContain('Knowledge is stored in digital pages');
+  });
 });

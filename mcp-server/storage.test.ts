@@ -11,8 +11,12 @@ import {
   updateReadingProgress,
   listBookmarks,
   addBookmark,
+  updateBookmark,
   deleteBookmark,
   getLibraryStats,
+  getCurrentlyReading,
+  normalizePercent,
+  exportReadingSummaryMarkdown,
 } from './storage';
 import type { LibraryState } from '../src/types';
 
@@ -187,5 +191,49 @@ describe('mcp-server/storage', () => {
     expect(stats.formats['m4b']).toBe(1);
     expect(stats.activeReadingCount).toBe(2);
     expect(stats.totalBookmarks).toBe(1);
+  });
+
+  it('retrieves currently reading items ordered by recency', async () => {
+    const active = await getCurrentlyReading(tempFilePath);
+    expect(active.length).toBe(2);
+    // item-3 has lastPlayed 6000, item-1 has lastPlayed 5000
+    expect(active[0].bookId).toBe('item-3');
+    expect(active[0].title).toBe('Dune Audiobook');
+    expect(active[1].bookId).toBe('item-1');
+    expect(active[1].latestBookmark?.label).toBe('Chapter 2 Quote');
+  });
+
+  it('updates an existing bookmark note and label', async () => {
+    const updated = await updateBookmark(
+      'item-1',
+      'bm-1',
+      { label: 'Updated Label', note: 'New analytical note' },
+      tempFilePath
+    );
+    expect(updated).not.toBeNull();
+    expect(updated?.label).toBe('Updated Label');
+    expect(updated?.note).toBe('New analytical note');
+    expect(updated?.excerpt).toBe('It is a truth universally acknowledged...');
+
+    const bookmarks = await listBookmarks('item-1', tempFilePath);
+    expect(bookmarks[0].label).toBe('Updated Label');
+    expect(bookmarks[0].note).toBe('New analytical note');
+  });
+
+  it('normalizes percentages properly', () => {
+    expect(normalizePercent(0)).toBe(0);
+    expect(normalizePercent(-5)).toBe(0);
+    expect(normalizePercent(0.354)).toBe(35.4);
+    expect(normalizePercent(1)).toBe(100);
+    expect(normalizePercent(42.5)).toBe(42.5);
+    expect(normalizePercent(150)).toBe(100);
+  });
+
+  it('generates a clean markdown reading summary', async () => {
+    const md = await exportReadingSummaryMarkdown(tempFilePath);
+    expect(md).toContain('# 📚 Acuity Reader — Reading Summary');
+    expect(md).toContain('Dune Audiobook');
+    expect(md).toContain('Pride and Prejudice');
+    expect(md).toContain('Chapter 2 Quote');
   });
 });
