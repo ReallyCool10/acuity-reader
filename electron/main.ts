@@ -271,6 +271,19 @@ function getSystemAccentColor(): string | null {
   return null;
 }
 
+function getAppIconPath(): string {
+  const candidates = [
+    path.join(__dirname, '../resources/icon.ico'),
+    path.join(__dirname, '../dist/icon.ico'),
+    path.join(process.resourcesPath, 'resources/icon.ico'),
+    path.join(process.resourcesPath, 'icon.ico'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return path.join(__dirname, '../resources/icon.ico');
+}
+
 function createMainWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
@@ -288,7 +301,7 @@ function createMainWindow() {
     minHeight: 520,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlay(isDark),
-    icon: path.join(__dirname, '../resources/icon.ico'),
+    icon: getAppIconPath(),
     backgroundMaterial: 'mica',
     backgroundColor: '#00000000',
     show: false,
@@ -343,7 +356,7 @@ function toggleWindow() {
 
 function createTray() {
   try {
-    const iconPath = path.join(__dirname, '../resources/icon.ico');
+    const iconPath = getAppIconPath();
     const icon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : createIcon('tray');
     tray = new Tray(icon);
     tray.setToolTip('Acuity Reader');

@@ -92,4 +92,41 @@ describe('AcuityLogo and Favicon SVG Synchronization', () => {
     const htmlContent = fs.readFileSync(htmlPath, 'utf8');
     expect(htmlContent).toContain('<link rel="icon" type="image/svg+xml" href="/acuity-logo.svg" />');
   });
+
+  it('verifies public/icon.ico and resources/icon.ico contain valid multi-size Windows icons', () => {
+    const publicIco = path.resolve(__dirname, '../../public/icon.ico');
+    const resourcesIco = path.resolve(__dirname, '../../resources/icon.ico');
+
+    expect(fs.existsSync(publicIco)).toBe(true);
+    expect(fs.existsSync(resourcesIco)).toBe(true);
+
+    const buf = fs.readFileSync(publicIco);
+    expect(buf.readUInt16LE(0)).toBe(0); // Reserved
+    expect(buf.readUInt16LE(2)).toBe(1); // Type 1 = ICO
+    const count = buf.readUInt16LE(4);
+    expect(count).toBe(6); // 16, 32, 48, 64, 128, 256
+
+    // Read icon dimensions
+    const expectedSizes = [16, 32, 48, 64, 128, 256];
+    const actualSizes: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const offset = 6 + i * 16;
+      const w = buf.readUInt8(offset) || 256;
+      actualSizes.push(w);
+    }
+    expect(actualSizes).toEqual(expectedSizes);
+
+    // Verify resources/icon.ico has the exact same content
+    const resBuf = fs.readFileSync(resourcesIco);
+    expect(resBuf.equals(buf)).toBe(true);
+  });
+
+  it('verifies electron-builder.json configures desktop icon and packages resources', () => {
+    const builderPath = path.resolve(__dirname, '../../electron-builder.json');
+    const config = JSON.parse(fs.readFileSync(builderPath, 'utf8'));
+
+    expect(config.win.icon).toBe('public/icon.ico');
+    expect(config.files).toContain('resources/**/*');
+    expect(config.nsis.createDesktopShortcut).toBe(true);
+  });
 });

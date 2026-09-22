@@ -8,7 +8,8 @@
   },
   "files": [
     "dist/**/*",
-    "dist-electron/**/*"
+    "dist-electron/**/*",
+    "resources/**/*"
   ],
   "extraResources": [
     {
