@@ -635,6 +635,18 @@
   color: inherit;
 }
 
+/* ---------------------------------------------------------- search highlight */
+
+::highlight(acuity-search-match) {
+  background-color: rgba(240, 178, 50, 0.28);
+  color: inherit;
+}
+
+::highlight(acuity-search-active) {
+  background-color: rgba(255, 120, 0, 0.75);
+  color: #ffffff;
+}
+
 /* ------------------------------------------------------------ reader themes */
 
 .reader-surface {

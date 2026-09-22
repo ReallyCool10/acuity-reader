@@ -211,4 +211,34 @@ describe('ReaderShell', () => {
       root.unmount();
     });
   });
+
+  it('renders search button and opens search tab when onSearch provided', async () => {
+    const onSearch = vi.fn().mockResolvedValue([]);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ReaderShell
+          {...defaultProps}
+          onSearch={onSearch}
+        >
+          <div>Book Content</div>
+        </ReaderShell>
+      );
+    });
+
+    const searchBtn = container.querySelector('button[aria-label="Search in book (Ctrl+F)"]') as HTMLButtonElement;
+    expect(searchBtn).toBeDefined();
+
+    await act(async () => {
+      searchBtn.click();
+    });
+
+    const searchInput = container.querySelector('input[placeholder="Search in book..."]') as HTMLInputElement;
+    expect(searchInput).toBeDefined();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
+

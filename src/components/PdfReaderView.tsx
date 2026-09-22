@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
 import {
+  extractPdfPageText,
   getPdfInfo,
   loadPdfDocument,
   renderPdfPage,
   type PdfDocumentInfo,
 } from '../lib/pdf';
 import type * as pdfjsLib from 'pdfjs-dist';
+import { searchInText, type SearchResultItem } from '../lib/search';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
 import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell';
 
@@ -36,6 +38,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
   const restoringRef = useRef(false);
+  const pageTextCacheRef = useRef<Map<number, string>>(new Map());
 
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [pdfInfo, setPdfInfo] = useState<PdfDocumentInfo | null>(null);
@@ -335,6 +338,44 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     );
   }, [pdfInfo?.outline, currentPage]);
 
+  const handleSearch = useCallback(
+    async (query: string): Promise<SearchResultItem[]> => {
+      if (!query.trim() || !pdfDoc || !pdfInfo) return [];
+
+      const results: SearchResultItem[] = [];
+      const numPages = pdfInfo.numPages;
+
+      for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+        let text = pageTextCacheRef.current.get(pageNum);
+        if (text === undefined) {
+          try {
+            const page = await pdfDoc.getPage(pageNum);
+            text = await extractPdfPageText(page);
+            pageTextCacheRef.current.set(pageNum, text);
+          } catch {
+            text = '';
+          }
+        }
+
+        if (text) {
+          const pageResults = searchInText(text, query, pageNum, `Page ${pageNum}`);
+          results.push(...pageResults);
+          if (results.length >= 150) break;
+        }
+      }
+
+      return results;
+    },
+    [pdfDoc, pdfInfo]
+  );
+
+  const handleSelectSearchResult = useCallback(
+    (result: SearchResultItem) => {
+      scrollToPage(result.locationIndex);
+    },
+    [scrollToPage]
+  );
+
   return (
     <ReaderShell
       title={pdfInfo?.title || item.title}
@@ -344,6 +385,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       onClose={onClose}
       companionPath={item.companionPath}
       onSwitchToAudio={onSwitchToAudio}
+      onSearch={handleSearch}
+      onSelectSearchResult={handleSelectSearchResult}
       appearanceSlot={
         <>
           <Section label="Page Zoom">

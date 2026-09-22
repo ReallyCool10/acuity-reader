@@ -16,6 +16,7 @@ import {
   base64ToBlobUrl,
   type NarrationMap,
 } from '../lib/narration';
+import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
 
 const FALLBACK_VOICE_CHOICES: { name: string; label: string }[] = [
   { name: 'en-US-JennyNeural', label: 'Jenny (US) — Natural, Warm ★' },
@@ -440,6 +441,37 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     }));
   }, [chapters, chapterIndex]);
 
+  const handleSearch = useCallback(
+    async (query: string): Promise<SearchResultItem[]> => {
+      if (!query.trim() || chapters.length === 0) return [];
+      const results: SearchResultItem[] = [];
+      chapters.forEach((ch, idx) => {
+        const chapterResults = searchInText(ch.text, query, idx, ch.title || `Chapter ${idx + 1}`);
+        results.push(...chapterResults);
+      });
+      return results;
+    },
+    [chapters]
+  );
+
+  const handleSelectSearchResult = useCallback(
+    (result: SearchResultItem) => {
+      if (result.locationIndex !== chapterIndex) {
+        goToChapter(result.locationIndex);
+        setTimeout(() => {
+          if (proseRef.current) {
+            highlightAndScrollToMatch(proseRef.current, result.matchedText, result.textOffset);
+          }
+        }, 120);
+      } else {
+        if (proseRef.current) {
+          highlightAndScrollToMatch(proseRef.current, result.matchedText, result.textOffset);
+        }
+      }
+    },
+    [chapterIndex, goToChapter]
+  );
+
   /* -------------------------------------------------------------- render */
 
   return (
@@ -451,6 +483,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       onClose={onClose}
       companionPath={item.companionPath}
       onSwitchToAudio={onSwitchToAudio}
+      onSearch={handleSearch}
+      onSelectSearchResult={handleSelectSearchResult}
       headerActionSlot={
         status === 'ready' && (
           <button

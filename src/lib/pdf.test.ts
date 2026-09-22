@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type * as pdfjsLib from 'pdfjs-dist';
-import { extractPdfOutline, getPdfInfo, renderPdfPage } from './pdf';
+import { extractPdfOutline, extractPdfPageText, getPdfInfo, renderPdfPage } from './pdf';
 
 describe('src/lib/pdf', () => {
   describe('extractPdfOutline', () => {
@@ -103,4 +103,24 @@ describe('src/lib/pdf', () => {
       });
     });
   });
+
+  describe('extractPdfPageText', () => {
+    it('concatenates and cleans text items from page content', async () => {
+      const mockPage = {
+        getTextContent: vi.fn().mockResolvedValue({
+          items: [
+            { str: 'Chapter' },
+            { str: '1:' },
+            { str: 'A' },
+            { str: 'New' },
+            { str: 'Beginning' },
+          ],
+        }),
+      } as unknown as pdfjsLib.PDFPageProxy;
+
+      const text = await extractPdfPageText(mockPage);
+      expect(text).toBe('Chapter 1: A New Beginning');
+    });
+  });
 });
+

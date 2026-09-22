@@ -148,3 +148,20 @@ export async function renderPdfPage(
 
   return page.render(renderContext);
 }
+
+/**
+ * Extracts plain text from a single PDF page for indexing and in-book search.
+ */
+export async function extractPdfPageText(page: pdfjsLib.PDFPageProxy): Promise<string> {
+  try {
+    const textContent = await page.getTextContent();
+    return textContent.items
+      .map((item) => ('str' in item ? (item.str as string) : ''))
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  } catch {
+    return '';
+  }
+}
+
