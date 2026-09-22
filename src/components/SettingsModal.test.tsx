@@ -134,4 +134,70 @@ describe('SettingsModal', () => {
       root.unmount();
     });
   });
+
+  it('switches to AI & MCP tab and renders 1-click integration options', async () => {
+    const mockClients = [
+      {
+        id: 'claude' as const,
+        name: 'Claude Desktop',
+        description: 'Anthropic Claude Desktop assistant',
+        detected: true,
+        installed: false,
+        configPath: 'C:/AppData/Claude/config.json',
+      },
+      {
+        id: 'cursor' as const,
+        name: 'Cursor IDE',
+        description: 'AI-first code editor',
+        detected: true,
+        installed: true,
+        configPath: 'C:/.cursor/mcp.json',
+      },
+    ];
+
+    window.electronAPI = {
+      ...(window.electronAPI || {}),
+      getMcpClients: vi.fn().mockResolvedValue(mockClients),
+      installMcpClient: vi.fn().mockResolvedValue({ success: true, message: 'Installed!' }),
+      uninstallMcpClient: vi.fn().mockResolvedValue({ success: true, message: 'Removed!' }),
+      getMcpSnippet: vi.fn().mockResolvedValue('{"mcpServers": {}}'),
+    } as any;
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<SettingsModal {...defaultProps} />);
+    });
+
+    // Click on AI & MCP tab
+    const mcpTabBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('AI & MCP')
+    );
+    expect(mcpTabBtn).toBeDefined();
+
+    await act(async () => {
+      mcpTabBtn?.click();
+    });
+
+    expect(window.electronAPI?.getMcpClients).toHaveBeenCalled();
+    expect(container.textContent).toContain('Claude Desktop');
+    expect(container.textContent).toContain('Cursor IDE');
+    expect(container.textContent).toContain('Configured');
+    expect(container.textContent).toContain('Detected on PC');
+
+    // Click 1-Click Setup on Claude
+    const installBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('1-Click Setup')
+    );
+    expect(installBtn).toBeDefined();
+
+    await act(async () => {
+      installBtn?.click();
+    });
+
+    expect(window.electronAPI?.installMcpClient).toHaveBeenCalledWith('claude');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

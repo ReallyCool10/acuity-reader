@@ -10,6 +10,12 @@
     "dist/**/*",
     "dist-electron/**/*"
   ],
+  "extraResources": [
+    {
+      "from": "dist-mcp",
+      "to": "mcp"
+    }
+  ],
   "win": {
     "target": [
       {

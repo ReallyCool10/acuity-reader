@@ -110,3 +110,18 @@ export interface SynthesisOptions {
   pitch?: number;
 }
 
+export interface McpClientInfo {
+  id: 'claude' | 'cursor' | 'antigravity' | 'windsurf';
+  name: string;
+  description: string;
+  detected: boolean;
+  installed: boolean;
+  configPath: string;
+}
+
+export interface McpSetupResult {
+  success: boolean;
+  message?: string;
+}
+
+

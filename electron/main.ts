@@ -24,6 +24,7 @@ import { computeStableId, migrateLibraryState } from './id';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
+import { getMcpClients, installMcpClient, uninstallMcpClient, getMcpSnippet } from './mcpSetup';
 import type { AudioChapter, SynthesisOptions } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -842,6 +843,26 @@ ipcMain.handle('tts:getEdgeVoices', async () => {
 /** Synthesize speech via Edge Neural TTS */
 ipcMain.handle('tts:synthesizeEdge', async (_event, options: SynthesisOptions) => {
   return synthesizeEdgeSpeech(options);
+});
+
+/** Return detected and installed MCP AI clients */
+ipcMain.handle('mcp:getClients', async () => {
+  return getMcpClients();
+});
+
+/** Install Acuity MCP server configuration to client */
+ipcMain.handle('mcp:installClient', async (_event, clientId: string) => {
+  return installMcpClient(clientId);
+});
+
+/** Remove Acuity MCP server configuration from client */
+ipcMain.handle('mcp:uninstallClient', async (_event, clientId: string) => {
+  return uninstallMcpClient(clientId);
+});
+
+/** Return formatted configuration snippet for manual copying */
+ipcMain.handle('mcp:getSnippet', async (_event, clientId: string) => {
+  return getMcpSnippet(clientId);
 });
 
 /* -------------------------------------------------------------- lifecycle */
