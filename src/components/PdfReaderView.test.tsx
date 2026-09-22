@@ -77,7 +77,7 @@ describe('PdfReaderView', () => {
     });
 
     expect(container.textContent).toContain('Clean Architecture in Practice');
-    expect(container.textContent).toContain('1 / 5');
+    expect(container.textContent).toContain('Page 1 of 5');
 
     // Click back button
     const backBtn = container.querySelector('button[aria-label="Back to library (Esc)"]') as HTMLButtonElement;
@@ -92,7 +92,7 @@ describe('PdfReaderView', () => {
     });
   });
 
-  it('zooms in and out when clicking zoom buttons', async () => {
+  it('zooms in and out when clicking zoom buttons in appearance menu', async () => {
     const root = createRoot(container);
     await act(async () => {
       root.render(<PdfReaderView {...defaultProps} />);
@@ -100,6 +100,13 @@ describe('PdfReaderView', () => {
 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
+    });
+
+    // Open Appearance menu to access zoom controls
+    const appearanceBtn = container.querySelector('button[aria-label="Appearance"]') as HTMLButtonElement;
+    expect(appearanceBtn).toBeDefined();
+    await act(async () => {
+      appearanceBtn.click();
     });
 
     const zoomInBtn = container.querySelector('button[aria-label="Zoom in (+)"]') as HTMLButtonElement;
@@ -133,21 +140,21 @@ describe('PdfReaderView', () => {
       await new Promise((r) => setTimeout(r, 20));
     });
 
-    expect(container.textContent).toContain('1 / 5');
+    expect(container.textContent).toContain('Page 1 of 5');
 
     const nextBtn = container.querySelector('button[aria-label="Next page (Right arrow)"]') as HTMLButtonElement;
     await act(async () => {
       nextBtn.click();
     });
 
-    expect(container.textContent).toContain('2 / 5');
+    expect(container.textContent).toContain('Page 2 of 5');
 
     const prevBtn = container.querySelector('button[aria-label="Previous page (Left arrow)"]') as HTMLButtonElement;
     await act(async () => {
       prevBtn.click();
     });
 
-    expect(container.textContent).toContain('1 / 5');
+    expect(container.textContent).toContain('Page 1 of 5');
 
     await act(async () => {
       root.unmount();
@@ -164,7 +171,7 @@ describe('PdfReaderView', () => {
       await new Promise((r) => setTimeout(r, 20));
     });
 
-    const tocBtn = container.querySelector('button[aria-label="Document Outline and Bookmarks"]') as HTMLButtonElement;
+    const tocBtn = container.querySelector('button[aria-label="Table of contents"]') as HTMLButtonElement;
     await act(async () => {
       tocBtn.click();
     });

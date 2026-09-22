@@ -1,8 +1,8 @@
-import React, { act } from 'react';
+import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { TitleBarControls } from './TitleBarControls';
-import type { ElectronAPI } from '../types';
+import type { ElectronAPI } from '../../electron/preload';
 
 describe('TitleBarControls', () => {
   let container: HTMLDivElement;
