@@ -508,7 +508,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
                       : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)]'
                   }`}
                 >
-                  {face}
+                  {face === 'serif' ? 'Serif' : 'Sans'}
                 </button>
               ))}
             </div>
@@ -519,7 +519,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               value={ttsVoice}
               onChange={(e) => setTtsVoice(e.target.value)}
               aria-label="Read Aloud Voice"
-              className="w-full rounded-[var(--radius-sm)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none"
+              className="w-full rounded-[var(--radius-sm)] border border-[var(--stroke-default)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none"
             >
               <optgroup label="Microsoft Edge Neural">
                 {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => {

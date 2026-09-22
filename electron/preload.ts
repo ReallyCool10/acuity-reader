@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { LibraryState, MediaItem, ThemeInfo, EdgeVoice, EdgeSynthesisResult, SynthesisOptions } from '../src/types';
+import type { AppTheme, LibraryState, MediaItem, ThemeInfo, EdgeVoice, EdgeSynthesisResult, SynthesisOptions } from '../src/types';
 
 export interface ScanProgress {
   count: number;
@@ -22,6 +22,7 @@ export interface ElectronAPI {
   readBytes: (path: string) => Promise<Uint8Array | null>;
   updateThumbar: (isPlaying: boolean) => void;
   getThemeInfo: () => Promise<ThemeInfo>;
+  setThemeSource: (source: AppTheme) => Promise<ThemeInfo>;
   onThemeChanged: (callback: (info: ThemeInfo) => void) => () => void;
   onPlayerCommand: (callback: (command: PlayerCommand) => void) => () => void;
   onPinChanged: (callback: (isPinned: boolean) => void) => () => void;
@@ -51,6 +52,7 @@ const api: ElectronAPI = {
   readBytes: (filePath) => ipcRenderer.invoke('file:readBytes', filePath),
   updateThumbar: (isPlaying) => ipcRenderer.send('thumbar:update', { isPlaying }),
   getThemeInfo: () => ipcRenderer.invoke('system:getThemeInfo'),
+  setThemeSource: (source: 'system' | 'dark' | 'light') => ipcRenderer.invoke('system:setThemeSource', source),
   onThemeChanged: (callback) => subscribe('system:theme-changed', callback),
   onPlayerCommand: (callback) => subscribe('player:command', callback),
   onPinChanged: (callback) => subscribe('window:pinned-changed', callback),

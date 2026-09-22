@@ -138,6 +138,12 @@ async function sanitiseChapter(
       if (name.startsWith('on')) el.removeAttribute(attr.name);
       else if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
         el.removeAttribute(attr.name);
+      } else if (name === 'style') {
+        const cleaned = attr.value
+          .replace(/(?:color|background(?:-color)?)\s*:[^;]+;?/gi, '')
+          .trim();
+        if (cleaned) el.setAttribute('style', cleaned);
+        else el.removeAttribute('style');
       }
     }
   }

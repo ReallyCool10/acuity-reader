@@ -74,6 +74,8 @@ export interface ActiveAudioTrack {
   volume: number;
 }
 
+export type AppTheme = 'system' | 'dark' | 'light';
+
 export interface ThemeInfo {
   isDark: boolean;
   accentColor: string | null;

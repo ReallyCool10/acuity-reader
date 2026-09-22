@@ -10,7 +10,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import { findSiblingTracks } from './lib/playlist';
-import type { Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
+import type { AppTheme, Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
 const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {} };
 
@@ -24,6 +24,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | MediaType>('all');
   const [sortKey, setSortKey] = usePersistentState<SortKey>('acuity.sortKey', 'recent');
+  const [appTheme, setAppTheme] = usePersistentState<AppTheme>('acuity.app.theme', 'system');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [scanCount, setScanCount] = useState(0);
@@ -65,31 +66,43 @@ export default function App() {
   /* --------------------------------------------------- system theme & mica */
 
   useEffect(() => {
-    function applyTheme(info: { isDark: boolean; accentColor: string | null }) {
-      if (info.isDark) {
+    function applyTheme(isDark: boolean, accentColor: string | null) {
+      if (isDark) {
         document.documentElement.removeAttribute('data-theme');
       } else {
         document.documentElement.setAttribute('data-theme', 'light');
       }
 
-      if (info.accentColor) {
-        document.documentElement.style.setProperty('--system-accent', info.accentColor);
+      if (accentColor) {
+        document.documentElement.style.setProperty('--system-accent', accentColor);
         document.documentElement.setAttribute('data-accent-override', 'true');
       } else {
         document.documentElement.removeAttribute('data-accent-override');
       }
     }
 
-    void window.electronAPI?.getThemeInfo?.().then((info) => {
-      if (info) applyTheme(info);
+    void window.electronAPI?.setThemeSource?.(appTheme).then((info) => {
+      if (info) {
+        applyTheme(info.isDark, info.accentColor);
+      }
     });
 
     const unbind = window.electronAPI?.onThemeChanged?.((info) => {
-      applyTheme(info);
+      if (appTheme === 'system') {
+        applyTheme(info.isDark, info.accentColor);
+      }
     });
 
+    if (!window.electronAPI) {
+      const isDark =
+        appTheme === 'system'
+          ? (typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches) ?? true
+          : appTheme === 'dark';
+      applyTheme(isDark, null);
+    }
+
     return () => unbind?.();
-  }, []);
+  }, [appTheme]);
 
   const scanFolders = useCallback(
     async (foldersToScan: string[]) => {
@@ -502,6 +515,8 @@ export default function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
+        appTheme={appTheme}
+        onThemeChange={setAppTheme}
         folders={library.folders}
         onAddFolder={() => void handleAddFolder()}
         onRemoveFolder={handleRemoveFolder}

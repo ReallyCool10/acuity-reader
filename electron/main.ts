@@ -823,6 +823,17 @@ ipcMain.handle('system:getThemeInfo', async () => {
   };
 });
 
+/** Set application theme source ('system' | 'dark' | 'light') */
+ipcMain.handle('system:setThemeSource', async (_event, source: 'system' | 'dark' | 'light') => {
+  nativeTheme.themeSource = source;
+  const isDarkNow = nativeTheme.shouldUseDarkColors;
+  mainWindow?.setTitleBarOverlay(getTitleBarOverlay(isDarkNow));
+  return {
+    isDark: isDarkNow,
+    accentColor: getSystemAccentColor(),
+  };
+});
+
 /** Return available Microsoft Edge neural voices */
 ipcMain.handle('tts:getEdgeVoices', async () => {
   return getEdgeVoices();

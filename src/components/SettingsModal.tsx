@@ -1,9 +1,12 @@
 import React, { useEffect, useRef } from 'react';
-import { FolderPlus, Loader2, RefreshCw, Trash2, X } from 'lucide-react';
+import { FolderPlus, Laptop, Loader2, Moon, RefreshCw, Sun, Trash2, X } from 'lucide-react';
+import type { AppTheme } from '../types';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  appTheme: AppTheme;
+  onThemeChange: (theme: AppTheme) => void;
   folders: string[];
   onAddFolder: () => void;
   onRemoveFolder: (folder: string) => void;
@@ -17,6 +20,8 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
+  appTheme,
+  onThemeChange,
   folders,
   onAddFolder,
   onRemoveFolder,
@@ -91,14 +96,51 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       >
         <header className="flex items-center justify-between border-b border-[var(--stroke-subtle)] px-4 py-3">
           <h2 id="settings-title" className="text-[13px] font-semibold text-[var(--text-primary)]">
-            Library folders
+            Settings
           </h2>
           <button type="button" onClick={onClose} className="icon-button" aria-label="Close settings">
             <X className="h-3.5 w-3.5" />
           </button>
         </header>
 
-        <div className="space-y-4 p-4">
+        <div className="space-y-5 p-4">
+          {/* Appearance Section */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+              Appearance
+            </h3>
+            <div className="flex gap-2">
+              {[
+                { key: 'system' as const, label: 'System', icon: Laptop },
+                { key: 'dark' as const, label: 'Dark', icon: Moon },
+                { key: 'light' as const, label: 'Light', icon: Sun },
+              ].map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onThemeChange(key)}
+                  aria-pressed={appTheme === key}
+                  className={`flex flex-1 items-center justify-center gap-1.5 rounded-[var(--radius-md)] border py-2 text-[12px] font-medium transition-all duration-150 ${
+                    appTheme === key
+                      ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] text-[var(--accent)] font-semibold shadow-sm'
+                      : 'border-[var(--stroke-subtle)] bg-[var(--surface-raised)] text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-t border-[var(--stroke-subtle)]" />
+
+          {/* Library Folders Section */}
+          <div className="space-y-2">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+              Library Folders
+            </h3>
+          </div>
           <div className="grid grid-cols-3 gap-2">
             {[
               { label: 'Titles', value: totalItems },
