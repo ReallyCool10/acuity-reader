@@ -47,11 +47,18 @@ app.whenReady().then(async () => {
 
     fs.writeFileSync(publicIconPng, pngBuffer);
     fs.writeFileSync(resourcesIconPng, pngBuffer);
+
+    const distDir = path.join(__dirname, '../dist');
+    const distElectronDir = path.join(__dirname, '../dist-electron');
+    if (fs.existsSync(distDir)) fs.writeFileSync(path.join(distDir, 'icon.png'), pngBuffer);
+    if (fs.existsSync(distElectronDir)) fs.writeFileSync(path.join(distElectronDir, 'icon.png'), pngBuffer);
+
     console.log('✓ Written public/icon.png and resources/icon.png (256x256)');
 
     // Generate multi-size ICO using Python PIL
     const pythonScript = `
 import sys
+import os
 from PIL import Image
 
 png_path = r'${publicIconPng}'
@@ -62,6 +69,11 @@ img = Image.open(png_path)
 sizes = [(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)]
 img.save(ico_public, format='ICO', sizes=sizes)
 img.save(ico_resources, format='ICO', sizes=sizes)
+
+for extra in [r'${distDir}', r'${distElectronDir}']:
+    if os.path.exists(extra):
+        img.save(os.path.join(extra, 'icon.ico'), format='ICO', sizes=sizes)
+
 print('[OK] Written public/icon.ico and resources/icon.ico')
 `;
 
