@@ -21,13 +21,17 @@ can be read as description rather than aspiration.
 | Library scanning, cover and metadata extraction | Working |
 | Audiobook playback (`.m4b`, `.mp3`, `.m4a`, `.aac`, `.flac`, `.ogg`, `.opus`) | Working |
 | Seeking within large audiobooks | Working (HTTP range streaming) |
+| Continuous play across multi-file audiobooks | Working |
+| M4B chapter markers | Working |
 | EPUB reading, spine-ordered with embedded images | Working |
-| Read-aloud narration with sentence highlighting | Working (system TTS voices) |
+| PDF reading, with outline, zoom and continuous scroll | Working |
+| In-book full-text search | Working |
+| Read-aloud narration with sentence highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
+| Bookmarks, with navigation | Working |
+| Sleep timer | Working |
 | Companion pairing of text and audio editions | Working (matched on normalised title) |
 | Progress persistence, per title and per format | Working |
-| Bookmarks | Captured and stored; **no UI yet to browse or jump to them** |
-| PDF reading | **Not implemented** — PDFs are indexed, but open to an explanatory notice |
-| M4B chapter markers / ID3 chapter frames | **Not implemented** — navigation is by timeline only |
+| MCP server for AI access to the library | Working (stdio transport) |
 | SQLite library index | **Not implemented** — state is a JSON file in `userData` |
 | macOS / mobile builds | **Not implemented** — Windows only today |
 
@@ -37,11 +41,6 @@ can be read as description rather than aspiration.
 
 **Electron** (main process + preload bridge) with a **React 19 + TypeScript** renderer, built by
 **Vite** and styled with **Tailwind CSS v4** over a CSS custom-property token layer.
-
-> **Note on `src-tauri/`**
-> The repository also contains a Tauri v2 scaffold. It is **not** the shipping shell — nothing
-> builds or runs it, and `package.json` targets Electron. It is retained only as a possible future
-> direction. Treat Electron as the real application until that is resolved one way or the other.
 
 ### Local file access
 
@@ -68,6 +67,36 @@ they are per-install chrome rather than user content.
 not zip entry order, which is arbitrary and interleaves front matter with chapters. Chapter
 markup is sanitised (scripts, styles, remote resources and inline event handlers removed) and
 embedded images are rewritten to blob URLs drawn from inside the archive.
+
+---
+
+## Privacy
+
+Acuity is a local application: your library is never uploaded, and the app has no account,
+telemetry or analytics.
+
+**One feature is an exception, and it is on by default.** Read-aloud offers two engines:
+
+| Voice | Where synthesis happens | What leaves your machine |
+|:--|:--|:--|
+| **Online — Microsoft** (default) | Microsoft's servers | The text currently being read aloud |
+| **System voice** | This device | Nothing |
+
+The online voices sound considerably better, which is why they are the default, but choosing them
+means the passage being narrated is transmitted to a Microsoft speech endpoint over a WebSocket.
+If you are reading anything you would not send to a third party, pick **System voice** in the
+reader's appearance menu. The choice is remembered, and narration falls back to the system voice
+automatically whenever the online service is unreachable.
+
+Two further caveats about the online engine:
+
+- It talks to the endpoint that Microsoft Edge's own Read Aloud uses. That interface is
+  undocumented and not intended for third-party clients, so it may change or stop working without
+  notice. The fallback to the system voice exists partly for that reason.
+- It requires an internet connection. The system voice does not.
+
+The bundled MCP server communicates over **stdio only** — it opens no network port and is reachable
+solely by a local process that launches it.
 
 ---
 
@@ -113,10 +142,19 @@ paths relative to themselves, so the repository can live anywhere.
 
 ## Testing
 
-There is **no test framework in this repository yet**. The EPUB parser and narration mapping are
-the most fragile parts of the codebase and currently have no automated protection. Adding Vitest
-with a DOM environment is the recommended next step; the parser's pure helpers (`resolveHref`,
-`extractText`, `sentenceBoundsAt`) are written to be directly unit-testable.
+```bash
+npm test          # Vitest, single run
+npm run test:watch
+npm run lint
+```
+
+Vitest runs in a jsdom environment. The suite covers the EPUB parser, PDF helpers, narration
+offset mapping, in-book search, path containment, stable-ID migration, companion pairing and the
+React components.
+
+`npm run build` additionally asserts that a CSS bundle was emitted. That check exists because the
+stylesheet was once not imported at all, so every utility class in the app silently did nothing
+while the build still reported success.
 
 ---
 

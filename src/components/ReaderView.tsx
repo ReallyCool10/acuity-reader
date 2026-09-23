@@ -18,6 +18,13 @@ import {
   FALLBACK_VOICE_CHOICES,
   type NarrationMap,
 } from '../lib/narration';
+import {
+  LOCAL_VOICE_ID,
+  LOCAL_VOICE_LABEL,
+  TTS_PRIVACY_NOTICE,
+  VOICE_GROUP_LOCAL,
+  VOICE_GROUP_ONLINE,
+} from '../lib/tts';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
 
 interface ReaderViewProps {
@@ -231,7 +238,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
       const api = window.electronAPI;
       const useEdge =
-        activeVoice !== 'system-local' &&
+        activeVoice !== LOCAL_VOICE_ID &&
         api !== undefined &&
         typeof api.synthesizeEdge === 'function';
 
@@ -752,7 +759,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               aria-label="Read Aloud Voice"
               className="w-full rounded-[var(--radius-sm)] border border-[var(--stroke-default)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none"
             >
-              <optgroup label="Microsoft Edge Neural">
+              <optgroup label={VOICE_GROUP_ONLINE}>
                 {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => {
                   const value = 'name' in v ? v.name : (v as { name: string; label: string }).name;
                   const label =
@@ -766,10 +773,13 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
                   );
                 })}
               </optgroup>
-              <optgroup label="Local System">
-                <option value="system-local">System Local Voice (Offline)</option>
+              <optgroup label={VOICE_GROUP_LOCAL}>
+                <option value={LOCAL_VOICE_ID}>{LOCAL_VOICE_LABEL}</option>
               </optgroup>
             </select>
+            <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-tertiary)]">
+              {TTS_PRIVACY_NOTICE}
+            </p>
           </Section>
 
           <Section label="Narration speed">

@@ -1,8 +1,30 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { app } from 'electron';
 import type { McpClientInfo, McpSetupResult } from '../src/types';
+
+/**
+ * Host values this module needs from the Electron app object.
+ *
+ * They are injected rather than imported. A static `import { app } from 'electron'`
+ * makes every consumer - including a unit test of pure path logic - resolve the
+ * Electron binary, which is why this file's tests could not run. Every other
+ * extracted module in electron/ stays free of that dependency; this one now does too.
+ */
+interface McpRuntime {
+  isPackaged: boolean;
+  appPath: string;
+}
+
+let runtime: McpRuntime = {
+  isPackaged: false,
+  appPath: typeof process !== 'undefined' ? process.cwd() : '',
+};
+
+/** Called once from the main process during startup. */
+export function configureMcpRuntime(next: Partial<McpRuntime>): void {
+  runtime = { ...runtime, ...next };
+}
 
 export interface ClientDefinition {
   id: 'claude' | 'cursor' | 'antigravity' | 'windsurf';
@@ -101,11 +123,10 @@ export function getMcpCommandConfig(options?: {
   args: string[];
   env?: Record<string, string>;
 } {
-  const isPackaged = options?.isPackaged ?? (typeof app !== 'undefined' ? app.isPackaged : false);
+  const isPackaged = options?.isPackaged ?? runtime.isPackaged;
   const resourcesPath = options?.resourcesPath ?? (typeof process !== 'undefined' ? process.resourcesPath : '');
   const execPath = options?.execPath ?? (typeof process !== 'undefined' ? process.execPath : '');
-  const appPath =
-    options?.appPath ?? (typeof app !== 'undefined' && app.getAppPath ? app.getAppPath() : process.cwd());
+  const appPath = options?.appPath ?? runtime.appPath;
 
   if (isPackaged && resourcesPath) {
     const scriptPath = path.join(resourcesPath, 'mcp', 'index.js');

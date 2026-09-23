@@ -6,6 +6,19 @@ URL.createObjectURL = (_blob: Blob | MediaSource) =>
 URL.revokeObjectURL = (_url: string) => {};
 
 
+/*
+ * jsdom does not implement ResizeObserver, which the PDF reader uses to keep
+ * fit-width in step with the window. Report a zero-size box: components fall
+ * back to their explicit scale, which is the behaviour under test.
+ */
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof ResizeObserver;
+}
+
 if (typeof Element.prototype.scrollIntoView === 'undefined') {
   Element.prototype.scrollIntoView = () => {};
 }

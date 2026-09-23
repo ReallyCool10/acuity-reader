@@ -11,6 +11,13 @@ import {
 import type * as pdfjsLib from 'pdfjs-dist';
 import { searchInText, type SearchResultItem } from '../lib/search';
 import { splitNarrationChunks, base64ToBlobUrl, FALLBACK_VOICE_CHOICES } from '../lib/narration';
+import {
+  LOCAL_VOICE_ID,
+  LOCAL_VOICE_LABEL,
+  TTS_PRIVACY_NOTICE,
+  VOICE_GROUP_LOCAL,
+  VOICE_GROUP_ONLINE,
+} from '../lib/tts';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
 import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell';
 
@@ -89,6 +96,14 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    /*
+     * The created document is held locally so cleanup can destroy the one this
+     * effect actually opened. Reading the pdfDoc state in cleanup captured null:
+     * the cleanup closes over the render in which the effect ran, which is always
+     * the render before setPdfDoc lands, so no document was ever released and the
+     * pdf.js worker and page buffers leaked on every file change.
+     */
+    let loaded: pdfjsLib.PDFDocumentProxy | null = null;
 
     async function load() {
       setStatus('loading');
@@ -114,6 +129,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
           return;
         }
 
+        loaded = doc;
         setPdfDoc(doc);
         setPdfInfo(info);
         setStatus('ready');
@@ -128,8 +144,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
     return () => {
       cancelled = true;
-      if (pdfDoc) {
-        void pdfDoc.destroy();
+      if (loaded) {
+        void loaded.destroy();
       }
     };
   }, [item.filePath]);
@@ -168,14 +184,37 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   /* ------------------------------------------------------------ fit width calculation */
 
+  /*
+   * Track the viewport width rather than reading the ref while rendering.
+   *
+   * Measuring containerRef.current inside the memo could not work: it is null on
+   * the first render, and a ref is not reactive, so the memo had no way to re-run
+   * when the element resized. Fit-width therefore never responded to the window
+   * being resized - which this app does constantly, being a dockable side panel.
+   * ResizeObserver fires once on observe, so the initial width arrives too.
+   */
+  const [containerWidth, setContainerWidth] = useState(0);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element) return;
+
+    const observer = new ResizeObserver((entries) => {
+      const width = entries[0]?.contentRect.width;
+      if (typeof width === 'number') setContainerWidth(width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [status]);
+
   const effectiveScale = useMemo(() => {
-    if (!isFitWidth || !containerRef.current) return scale;
-    const containerWidth = containerRef.current.clientWidth - 48; // padding
-    if (containerWidth <= 0) return scale;
-    // Standard PDF page width is around 595 - 612 pt
-    const autoScale = Math.min(2.5, Math.max(0.6, containerWidth / 612));
+    if (!isFitWidth) return scale;
+    const usableWidth = containerWidth - 48; // horizontal padding
+    if (usableWidth <= 0) return scale;
+    // A standard PDF page is roughly 595-612pt wide.
+    const autoScale = Math.min(2.5, Math.max(0.6, usableWidth / 612));
     return Number(autoScale.toFixed(2));
-  }, [isFitWidth, scale]);
+  }, [isFitWidth, scale, containerWidth]);
 
   /* ------------------------------------------------------------ re-render on zoom/doc change */
 
@@ -191,13 +230,18 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   /* ------------------------------------------------------------ initial position restoration */
 
+  /*
+   * The saved page is captured once, rather than read from props on every run:
+   * it describes where the reader left off, so a later progress save must not
+   * scroll the view back to it.
+   */
+  const savedPageRef = useRef(initialProgress?.chapterIndex);
+
   useEffect(() => {
     if (status !== 'ready' || !pdfDoc) return;
 
-    const initialPage =
-      initialProgress?.chapterIndex !== undefined && initialProgress.chapterIndex >= 0
-        ? initialProgress.chapterIndex + 1
-        : 1;
+    const savedPage = savedPageRef.current;
+    const initialPage = savedPage !== undefined && savedPage >= 0 ? savedPage + 1 : 1;
     const targetElement = pageRefs.current.get(initialPage);
     if (targetElement && containerRef.current) {
       restoringRef.current = true;
@@ -206,6 +250,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       setTimeout(() => {
         restoringRef.current = false;
       }, 300);
+      savedPageRef.current = undefined;
     }
   }, [status, pdfDoc]);
 
@@ -329,6 +374,18 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     [pdfDoc]
   );
 
+  /*
+   * Indirection to break a cycle between the two narration callbacks:
+   * fallbackLocalPdfSpeech advances to the next page via startNarration, while
+   * startNarration falls back to fallbackLocalPdfSpeech when the online voice
+   * fails. Referencing the later-declared callback directly worked only by
+   * accident of call timing, and forced an eslint-disable that also hid the
+   * genuine missing dependency. Routing one side through a ref removes both.
+   */
+  const startNarrationRef = useRef<
+    ((fromPage?: number, overrideVoice?: string, overrideRate?: number) => void) | null
+  >(null);
+
   const fallbackLocalPdfSpeech = useCallback(
     (textToSpeak: string, pageNum: number, overrideRate?: number) => {
       window.speechSynthesis?.cancel();
@@ -337,7 +394,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
       utterance.onend = () => {
         if (pdfInfo && pageNum < pdfInfo.numPages) {
-          void startNarration(pageNum + 1);
+          startNarrationRef.current?.(pageNum + 1);
         } else {
           stopNarration();
         }
@@ -350,7 +407,6 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       setIsNarrating(true);
       window.speechSynthesis?.speak(utterance);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [narrationRate, pdfInfo, stopNarration]
   );
 
@@ -372,7 +428,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       if (!pageText) {
         // Page has no extractable text (e.g. image-only); auto-advance to next page
         if (fromPage < pdfInfo.numPages) {
-          void startNarration(fromPage + 1, overrideVoice, overrideRate);
+          startNarrationRef.current?.(fromPage + 1, overrideVoice, overrideRate);
         } else {
           stopNarration();
         }
@@ -383,7 +439,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       const activeRate = overrideRate ?? narrationRate;
       const api = window.electronAPI;
       const useEdge =
-        activeVoice !== 'system-local' &&
+        activeVoice !== LOCAL_VOICE_ID &&
         api !== undefined &&
         typeof api.synthesizeEdge === 'function';
 
@@ -395,7 +451,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         const chunks = splitNarrationChunks(pageText, 800, 0);
         if (chunks.length === 0) {
           if (fromPage < pdfInfo.numPages) {
-            void startNarration(fromPage + 1, activeVoice, activeRate);
+            startNarrationRef.current?.(fromPage + 1, activeVoice, activeRate);
           } else {
             stopNarration();
           }
@@ -414,7 +470,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
           if (index >= chunks.length) {
             // Page finished! Advance to next page automatically
             if (fromPage < pdfInfo.numPages) {
-              void startNarration(fromPage + 1, activeVoice, activeRate);
+              startNarrationRef.current?.(fromPage + 1, activeVoice, activeRate);
             } else {
               stopNarration();
             }
@@ -484,6 +540,10 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     },
     [currentPage, fallbackLocalPdfSpeech, getPageText, narrationRate, pdfDoc, pdfInfo, scrollToPage, stopNarration, ttsVoice]
   );
+
+  useEffect(() => {
+    startNarrationRef.current = startNarration;
+  }, [startNarration]);
 
   const handleVoiceChange = useCallback(
     (newVoice: string) => {
@@ -745,17 +805,20 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
               onChange={(e) => handleVoiceChange(e.target.value)}
               className="w-full rounded-[var(--radius-sm)] border border-[var(--stroke-default)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
             >
-              <optgroup label="Microsoft Natural Neural (Recommended)">
+              <optgroup label={VOICE_GROUP_ONLINE}>
                 {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => (
                   <option key={v.name} value={v.name}>
                     {'label' in v ? (v as { label: string }).label : `${v.friendlyName || v.name} (${v.locale})`}
                   </option>
                 ))}
               </optgroup>
-              <optgroup label="Offline Fallback">
-                <option value="system-local">System Default Synthesizer</option>
+              <optgroup label={VOICE_GROUP_LOCAL}>
+                <option value={LOCAL_VOICE_ID}>{LOCAL_VOICE_LABEL}</option>
               </optgroup>
             </select>
+            <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-tertiary)]">
+              {TTS_PRIVACY_NOTICE}
+            </p>
           </Section>
 
           <Section label="Reading speed">
