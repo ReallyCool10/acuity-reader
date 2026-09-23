@@ -312,9 +312,9 @@ describe('AudioPlayerBar', () => {
       );
     });
 
-    expect(container.textContent).toContain('Audiobook Player');
     expect(container.textContent).toContain('Great Audiobook');
     expect(container.textContent).toContain('Jane Doe');
+    expect(container.textContent).not.toContain('Audiobook Player');
 
     const coverImg = container.querySelector('img[alt="Great Audiobook"]');
     expect(coverImg).toBeDefined();
@@ -353,10 +353,10 @@ describe('AudioPlayerBar', () => {
       );
     });
 
-    expect(container.textContent).toContain('Audiobook Player');
     expect(container.textContent).toContain('Audiobook');
     expect(container.textContent).toContain('Great Audiobook');
     expect(container.textContent).toContain('Jane Doe');
+    expect(container.textContent).not.toContain('Audiobook Player');
 
     // No img element rendered when coverUrl is undefined
     const coverImg = container.querySelector('img');

@@ -308,6 +308,24 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               });
             }
 
+            // Pre-calculate sequential character offsets for each boundary within chunk.text
+            // Microsoft Edge TTS word and sentence boundaries appear in chronological order.
+            // A moving searchCursor prevents common repeating words (e.g. "the", "a") from resetting to index 0.
+            let searchCursor = 0;
+            const mappedBoundaries = synthesisResult.boundaries.map((b) => {
+              let charOffset = -1;
+              if (b.text) {
+                const foundIdx = chunk.text.indexOf(b.text, searchCursor);
+                if (foundIdx !== -1) {
+                  charOffset = foundIdx;
+                  searchCursor = foundIdx + b.text.length;
+                } else {
+                  charOffset = chunk.text.indexOf(b.text);
+                }
+              }
+              return { ...b, charOffset };
+            });
+
             if (currentBlobUrl) {
               URL.revokeObjectURL(currentBlobUrl);
             }
@@ -321,21 +339,20 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               if (!currentMap) return;
 
               const timeMs = audio.currentTime * 1000;
-              let active = synthesisResult.boundaries.find(
+              let active = mappedBoundaries.find(
                 (b) => timeMs >= b.offsetMs && timeMs < b.offsetMs + b.durationMs
               );
               if (!active) {
-                for (let i = synthesisResult.boundaries.length - 1; i >= 0; i--) {
-                  if (timeMs >= synthesisResult.boundaries[i].offsetMs) {
-                    active = synthesisResult.boundaries[i];
+                for (let i = mappedBoundaries.length - 1; i >= 0; i--) {
+                  if (timeMs >= mappedBoundaries[i].offsetMs) {
+                    active = mappedBoundaries[i];
                     break;
                   }
                 }
               }
 
-              if (active) {
-                const relIdx = chunk.text.indexOf(active.text);
-                const globalCharIdx = chunk.startChar + (relIdx !== -1 ? relIdx : 0);
+              if (active && active.charOffset !== -1) {
+                const globalCharIdx = chunk.startChar + active.charOffset;
                 currentCharIndexRef.current = globalCharIdx;
                 saveNarrationProgress(globalCharIdx);
                 updateVisualHighlight(currentMap, globalCharIdx);

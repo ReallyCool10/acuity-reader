@@ -797,34 +797,16 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       />
 
       {isFullScreen ? (
-        <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-overlay)] backdrop-blur-3xl animate-reader-in select-none text-[var(--text-primary)]">
+        <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-player)] animate-reader-in select-none text-[var(--text-primary)]">
           {/* Header Bar */}
           <header
-            className="acu-drag relative z-40 flex shrink-0 items-center justify-between border-b border-[var(--stroke-subtle)] px-3 backdrop-blur-xl"
+            className="acu-drag relative z-40 flex shrink-0 items-center justify-between border-b border-[var(--stroke-subtle)] px-3 bg-[var(--surface-player)]"
             style={{ height: 'var(--titlebar-height, 40px)' }}
           >
-            {/* Left: Minimize button */}
-            <div className="acu-no-drag flex items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => setIsFullScreen(false)}
-                className="group flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[12px] font-medium text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]"
-                aria-label="Minimize player to bar (Esc)"
-                title="Minimize player to bar (Esc)"
-              >
-                <Minimize2 className="h-3.5 w-3.5 transition-transform duration-200 group-hover:-translate-y-0.5" />
-                <span>Minimize</span>
-              </button>
-            </div>
+            {/* Left spacer for window drag */}
+            <div className="flex-1" />
 
-            {/* Center: Now Playing indicator */}
-            <div className="pointer-events-none min-w-0 flex-1 px-4 text-center">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
-                Audiobook Player
-              </span>
-            </div>
-
-            {/* Right: Companion eBook switch & Close button */}
+            {/* Right: Companion eBook switch, Minimize & Close buttons */}
             <div
               className="acu-no-drag flex items-center gap-1.5"
               style={{
@@ -846,6 +828,16 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                   <span>Read eBook</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setIsFullScreen(false)}
+                className="icon-button"
+                aria-label="Minimize player to bar (Esc)"
+                title="Minimize player to bar (Esc)"
+              >
+                <Minimize2 className="h-4 w-4" />
+              </button>
 
               <button
                 type="button"
@@ -1042,7 +1034,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         </div>
       ) : (
         <div
-          className="acu-no-drag relative z-40 shrink-0 border-t border-[var(--stroke-subtle)] bg-[var(--surface-base)] backdrop-blur-2xl"
+          className="acu-no-drag relative z-40 shrink-0 border-t border-[var(--stroke-subtle)] bg-[var(--surface-player-docked)]"
           style={{ boxShadow: '0 -8px 28px -12px rgba(0,0,0,0.6)' }}
         >
 

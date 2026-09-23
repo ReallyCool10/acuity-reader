@@ -119,6 +119,7 @@ export async function getEdgeVoices(): Promise<EdgeVoice[]> {
 
 function escapeXml(text: string): string {
   return text
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -160,6 +161,8 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
     const audioChunks: Buffer[] = [];
     const boundaries: EdgeBoundary[] = [];
 
+    let isSettled = false;
+
     const cleanup = () => {
       if (timeoutId) {
         clearTimeout(timeoutId);
@@ -175,9 +178,22 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
       }
     };
 
-    timeoutId = setTimeout(() => {
+    const doResolve = (result: EdgeSynthesisResult) => {
+      if (isSettled) return;
+      isSettled = true;
       cleanup();
-      reject(new Error('Edge TTS synthesis timed out after 20 seconds.'));
+      resolve(result);
+    };
+
+    const doReject = (err: Error) => {
+      if (isSettled) return;
+      isSettled = true;
+      cleanup();
+      reject(err);
+    };
+
+    timeoutId = setTimeout(() => {
+      doReject(new Error('Edge TTS synthesis timed out after 20 seconds.'));
     }, 20000);
 
     try {
@@ -264,9 +280,9 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
               }
             }
           } else if (msg.includes('Path:turn.end')) {
-            cleanup();
             const totalAudio = Buffer.concat(audioChunks);
-            resolve({
+            boundaries.sort((a, b) => a.offsetMs - b.offsetMs);
+            doResolve({
               audioBase64: totalAudio.toString('base64'),
               mimeType: 'audio/mp3',
               boundaries,
@@ -276,27 +292,24 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
       });
 
       ws.on('error', (err) => {
-        cleanup();
-        reject(err);
+        doReject(err instanceof Error ? err : new Error(String(err)));
       });
 
       ws.on('close', (code, reason) => {
         if (audioChunks.length > 0) {
-          cleanup();
           const totalAudio = Buffer.concat(audioChunks);
-          resolve({
+          boundaries.sort((a, b) => a.offsetMs - b.offsetMs);
+          doResolve({
             audioBase64: totalAudio.toString('base64'),
             mimeType: 'audio/mp3',
             boundaries,
           });
         } else {
-          cleanup();
-          reject(new Error(`WebSocket closed before audio received: code=${code} ${reason.toString()}`));
+          doReject(new Error(`WebSocket closed before audio received: code=${code} ${reason.toString()}`));
         }
       });
     } catch (err) {
-      cleanup();
-      reject(err);
+      doReject(err instanceof Error ? err : new Error(String(err)));
     }
   });
 }

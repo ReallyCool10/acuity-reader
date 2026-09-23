@@ -39,6 +39,9 @@ const __dirname = path.dirname(__filename);
 
 app.name = 'Acuity Reader';
 
+// Allow programmatic audio playback for synthesized TTS and previews without user gesture timeouts
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let isPinned = false;

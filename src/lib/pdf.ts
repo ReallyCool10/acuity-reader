@@ -155,8 +155,40 @@ export async function renderPdfPage(
 export async function extractPdfPageText(page: pdfjsLib.PDFPageProxy): Promise<string> {
   try {
     const textContent = await page.getTextContent();
-    return textContent.items
-      .map((item) => ('str' in item ? (item.str as string) : ''))
+
+    interface RawPdfTextItem {
+      str: string;
+      transform?: number[];
+    }
+
+    const items: RawPdfTextItem[] = [];
+    for (const raw of textContent.items) {
+      if (raw && typeof raw === 'object' && 'str' in raw && typeof (raw as { str: unknown }).str === 'string') {
+        const item = raw as { str: string; transform?: number[] };
+        items.push({
+          str: item.str,
+          transform: Array.isArray(item.transform) ? item.transform : undefined,
+        });
+      }
+    }
+
+    // Sort items in reading order: top-to-bottom (Y desc), then left-to-right (X asc).
+    // In PDF coordinates, (0, 0) is bottom-left, so larger Y is physically higher on the page.
+    items.sort((a, b) => {
+      const transformA = a.transform;
+      const transformB = b.transform;
+      if (transformA && transformB && transformA.length >= 6 && transformB.length >= 6) {
+        const yDiff = transformB[5] - transformA[5];
+        if (Math.abs(yDiff) > 4) {
+          return yDiff;
+        }
+        return transformA[4] - transformB[4];
+      }
+      return 0;
+    });
+
+    return items
+      .map((item) => item.str)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim();

@@ -234,17 +234,44 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     return Number(autoScale.toFixed(2));
   }, [isFitWidth, scale, containerWidth]);
 
+  /* ------------------------------------------------------------ virtual windowing geometry */
+
+  const RENDER_BUFFER = 2; // Render current page ± 2 pages to conserve memory
+  const [pageAspect, setPageAspect] = useState<number>(1.414);
+
+  useEffect(() => {
+    if (!pdfDoc) return;
+    pdfDoc
+      .getPage(1)
+      .then((p1) => {
+        const vp = p1.getViewport({ scale: 1 });
+        if (vp.width > 0 && vp.height > 0) {
+          setPageAspect(vp.height / vp.width);
+        }
+      })
+      .catch(() => {});
+  }, [pdfDoc]);
+
+  const estimatedPageWidth = useMemo(() => {
+    return Math.floor(612 * effectiveScale);
+  }, [effectiveScale]);
+
+  const estimatedPageHeight = useMemo(() => {
+    return Math.floor(estimatedPageWidth * pageAspect);
+  }, [estimatedPageWidth, pageAspect]);
+
   /* ------------------------------------------------------------ re-render on zoom/doc change */
 
   useEffect(() => {
     if (!pdfDoc || status !== 'ready') return;
 
-    // Render visible pages
-    const numPages = pdfDoc.numPages;
-    for (let p = 1; p <= numPages; p++) {
+    // Render only visible pages within buffer window around current page
+    const start = Math.max(1, currentPage - RENDER_BUFFER);
+    const end = Math.min(pdfDoc.numPages, currentPage + RENDER_BUFFER);
+    for (let p = start; p <= end; p++) {
       void renderSinglePage(p, effectiveScale);
     }
-  }, [pdfDoc, status, effectiveScale, renderSinglePage]);
+  }, [pdfDoc, status, effectiveScale, currentPage, renderSinglePage]);
 
   /* ------------------------------------------------------------ initial position restoration */
 
@@ -412,7 +439,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
       utterance.onend = () => {
         if (pdfInfo && pageNum < pdfInfo.numPages) {
-          startNarrationRef.current?.(pageNum + 1);
+          startNarrationRef.current?.(pageNum + 1, LOCAL_VOICE_ID, overrideRate);
         } else {
           stopNarration();
         }
@@ -904,35 +931,68 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
         {status === 'ready' && pdfDoc && (
           <div className="flex flex-col items-center gap-6 pb-20">
-            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
-              <div
-                key={pageNum}
-                ref={(el) => {
-                  if (el) pageRefs.current.set(pageNum, el);
-                  else pageRefs.current.delete(pageNum);
-                }}
-                onDoubleClick={() => {
-                  void startNarration(pageNum);
-                }}
-                className={`relative rounded-sm shadow-xl transition-all duration-300 ${
-                  narratingPage === pageNum
-                    ? 'ring-4 ring-[var(--accent)] ring-offset-4 ring-offset-transparent shadow-[0_0_35px_rgba(240,178,50,0.35)]'
-                    : ''
-                }`}
-                style={{
-                  filter: themeStyle.pageFilter,
-                  backgroundColor: '#ffffff',
-                }}
-              >
-                <canvas
-                  ref={(canvas) => {
-                    if (canvas) canvasRefs.current.set(pageNum, canvas);
-                    else canvasRefs.current.delete(pageNum);
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
+              const isNearViewport =
+                pageNum >= currentPage - RENDER_BUFFER &&
+                pageNum <= currentPage + RENDER_BUFFER;
+
+              return (
+                <div
+                  key={pageNum}
+                  ref={(el) => {
+                    if (el) pageRefs.current.set(pageNum, el);
+                    else pageRefs.current.delete(pageNum);
                   }}
-                  className="block rounded-sm"
-                />
-              </div>
-            ))}
+                  onDoubleClick={() => {
+                    void startNarration(pageNum);
+                  }}
+                  className={`relative rounded-sm shadow-xl transition-all duration-300 flex items-center justify-center ${
+                    narratingPage === pageNum
+                      ? 'ring-4 ring-[var(--accent)] ring-offset-4 ring-offset-transparent shadow-[0_0_35px_rgba(240,178,50,0.35)]'
+                      : ''
+                  }`}
+                  style={{
+                    filter: themeStyle.pageFilter,
+                    backgroundColor: '#ffffff',
+                    minWidth: `${estimatedPageWidth}px`,
+                    minHeight: `${estimatedPageHeight}px`,
+                  }}
+                >
+                  {isNearViewport ? (
+                    <canvas
+                      ref={(canvas) => {
+                        if (canvas) {
+                          canvasRefs.current.set(pageNum, canvas);
+                          void renderSinglePage(pageNum, effectiveScale);
+                        } else {
+                          canvasRefs.current.delete(pageNum);
+                          const ongoing = renderTasksRef.current.get(pageNum);
+                          if (ongoing) {
+                            try {
+                              ongoing.cancel();
+                            } catch {
+                              // ignore
+                            }
+                            renderTasksRef.current.delete(pageNum);
+                          }
+                        }
+                      }}
+                      className="block rounded-sm"
+                    />
+                  ) : (
+                    <div
+                      className="flex flex-col items-center justify-center text-[12px] opacity-35 select-none"
+                      style={{
+                        width: `${estimatedPageWidth}px`,
+                        height: `${estimatedPageHeight}px`,
+                      }}
+                    >
+                      <span>Page {pageNum}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </main>

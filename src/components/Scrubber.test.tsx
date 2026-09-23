@@ -98,6 +98,13 @@ describe('Scrubber', () => {
     expect(labels[1]).toContain('Chapter 2: The Journey');
     expect(labels[2]).toContain('Chapter 3: The Climax');
 
+    // Ensure the chapter dot containers are vertically and horizontally centered on the track
+    const markerContainers = container.querySelectorAll('.pointer-events-auto.absolute');
+    markerContainers.forEach((wrapper) => {
+      expect(wrapper.className).toContain('-translate-x-1/2');
+      expect(wrapper.className).toContain('-translate-y-1/2');
+    });
+
     await act(async () => {
       root.unmount();
     });

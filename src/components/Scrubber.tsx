@@ -103,7 +103,7 @@ export const Scrubber: React.FC<ScrubberProps> = ({
             return (
               <div
                 key={chap.id}
-                className="pointer-events-auto absolute -translate-x-1/2 flex items-center justify-center"
+                className="pointer-events-auto absolute -translate-x-1/2 -translate-y-1/2 flex items-center justify-center"
                 style={{
                   left: `${chapRatio * 100}%`,
                   top: '50%',
