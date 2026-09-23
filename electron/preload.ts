@@ -12,8 +12,11 @@ export interface ElectronAPI {
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
   close: () => Promise<void>;
+  isMaximized: () => Promise<boolean>;
+  onMaximizedChanged: (callback: (isMaximized: boolean) => void) => () => void;
   togglePin: () => Promise<boolean>;
   isPinned: () => Promise<boolean>;
+  setTitleBarTheme: (isDark: boolean) => Promise<boolean>;
   pickFolder: () => Promise<string | null>;
   revealInFolder: (path: string) => Promise<void>;
   scanFolder: (path: string) => Promise<MediaItem[]>;
@@ -46,8 +49,11 @@ const api: ElectronAPI = {
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),
+  isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  onMaximizedChanged: (callback) => subscribe('window:maximized-changed', callback),
   togglePin: () => ipcRenderer.invoke('window:togglePin'),
   isPinned: () => ipcRenderer.invoke('window:isPinned'),
+  setTitleBarTheme: (isDark: boolean) => ipcRenderer.invoke('system:setTitleBarTheme', isDark),
   pickFolder: () => ipcRenderer.invoke('dialog:pickFolder'),
   revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),
   scanFolder: (folderPath) => ipcRenderer.invoke('scanner:scanFolder', folderPath),

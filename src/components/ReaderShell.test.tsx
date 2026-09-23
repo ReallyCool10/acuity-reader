@@ -240,5 +240,57 @@ describe('ReaderShell', () => {
       root.unmount();
     });
   });
+
+  it('renders window controls (minimize, maximize, close) in header', async () => {
+    const minimizeMock = vi.fn().mockResolvedValue(undefined);
+    const maximizeMock = vi.fn().mockResolvedValue(undefined);
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+
+    window.electronAPI = {
+      minimize: minimizeMock,
+      maximize: maximizeMock,
+      close: closeMock,
+      isMaximized: vi.fn().mockResolvedValue(false),
+      onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
+      setTitleBarTheme: vi.fn().mockResolvedValue(true),
+    } as unknown as any;
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ReaderShell {...defaultProps}>
+          <div>Book Content</div>
+        </ReaderShell>
+      );
+    });
+
+    const minBtn = container.querySelector('button[aria-label="Minimize"]') as HTMLButtonElement;
+    const maxBtn = container.querySelector('button[aria-label="Maximize"]') as HTMLButtonElement;
+    const closeBtn = container.querySelector('button[aria-label="Close"]') as HTMLButtonElement;
+
+    expect(minBtn).not.toBeNull();
+    expect(maxBtn).not.toBeNull();
+    expect(closeBtn).not.toBeNull();
+
+    await act(async () => {
+      minBtn.click();
+    });
+    expect(minimizeMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      maxBtn.click();
+    });
+    expect(maximizeMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      closeBtn.click();
+    });
+    expect(closeMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
+
 

@@ -22,6 +22,7 @@ import {
 import type { Bookmark as BookmarkType } from '../types';
 import type { SearchResultItem } from '../lib/search';
 import { useDismissable } from '../hooks/useDismissable';
+import { WindowControls } from './WindowControls';
 
 export type ReadingTheme = 'dark' | 'sepia' | 'light';
 
@@ -199,6 +200,10 @@ export const ReaderShell: React.FC<ReaderShellProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [onSearch]);
 
+  useEffect(() => {
+    void window.electronAPI?.setTitleBarTheme?.(theme === 'dark');
+  }, [theme]);
+
   const clampedProgress = Math.max(0, Math.min(100, Math.round(progressPercent)));
   const displayProgressLabel = progressLabel ?? `${clampedProgress}%`;
 
@@ -209,8 +214,12 @@ export const ReaderShell: React.FC<ReaderShellProps> = ({
     >
       {/* ------------------------------------------------------------ HEADER */}
       <header
-        className="acu-drag relative z-40 flex h-12 shrink-0 items-center justify-between gap-2 border-b px-2.5 backdrop-blur-xl"
-        style={{ background: 'var(--reader-chrome)', borderColor: 'var(--reader-rule)' }}
+        className="acu-drag relative z-40 flex shrink-0 items-center justify-between gap-2 border-b pl-2.5 pr-0 backdrop-blur-xl"
+        style={{
+          height: 'var(--titlebar-height, 40px)',
+          background: 'var(--reader-chrome)',
+          borderColor: 'var(--reader-rule)',
+        }}
       >
         {/* Left Cluster */}
         <div className="acu-no-drag flex items-center gap-1.5">
@@ -519,95 +528,94 @@ export const ReaderShell: React.FC<ReaderShellProps> = ({
           )}
         </div>
 
-        {/* Right Cluster */}
-        <div
-          className="acu-no-drag flex items-center gap-1"
-          style={{
-            paddingRight:
-              'calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px))',
-          }}
-        >
-          {companionPath && onSwitchToAudio && (
-            <button
-              type="button"
-              onClick={() => onSwitchToAudio(companionPath)}
-              className="flex items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent-ring)] bg-[var(--accent-muted)] px-2 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors duration-150 hover:bg-[rgba(240,178,50,0.24)]"
-              title="Switch to companion audiobook"
-              aria-label="Switch to companion audiobook"
-            >
-              <Headphones className="h-3 w-3" />
-              <span>Listen</span>
-            </button>
-          )}
-
-          {headerActionSlot}
-
-          {/* Appearance / Theme Drawer */}
-          <div className="relative" ref={appearanceRef}>
-            <button
-              type="button"
-              onClick={() => setIsAppearanceOpen((open) => !open)}
-              className={`icon-button ${isAppearanceOpen ? 'active' : ''}`}
-              style={{ color: isAppearanceOpen ? 'var(--accent)' : 'var(--reader-muted)' }}
-              aria-haspopup="menu"
-              aria-expanded={isAppearanceOpen}
-              aria-label="Appearance"
-              title="Appearance"
-            >
-              <Type className="h-4 w-4" />
-            </button>
-
-            {isAppearanceOpen && (
-              <div
-                className="menu right-0 top-full mt-1.5 w-64 space-y-3 p-3 z-50 shadow-2xl"
-                style={{ '--menu-origin': 'top right' } as React.CSSProperties}
+        {/* Right Section: Action Cluster + Window Controls */}
+        <div className="flex h-full items-center">
+          <div className="acu-no-drag flex items-center gap-1 pr-1.5">
+            {companionPath && onSwitchToAudio && (
+              <button
+                type="button"
+                onClick={() => onSwitchToAudio(companionPath)}
+                className="flex items-center gap-1 rounded-[var(--radius-md)] border border-[var(--accent-ring)] bg-[var(--accent-muted)] px-2 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors duration-150 hover:bg-[rgba(240,178,50,0.24)]"
+                title="Switch to companion audiobook"
+                aria-label="Switch to companion audiobook"
               >
-                <Section label="Theme">
-                  <div className="flex gap-1.5">
-                    {THEMES.map(({ key, label, icon: Icon }) => (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => onThemeChange(key)}
-                        aria-pressed={theme === key}
-                        className={`flex flex-1 items-center justify-center gap-1 rounded-[var(--radius-sm)] border py-1.5 text-[11px] transition-colors duration-150 ${
-                          theme === key
-                            ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] text-[var(--accent)]'
-                            : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)]'
-                        }`}
-                      >
-                        <Icon className="h-3 w-3" />
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                </Section>
+                <Headphones className="h-3 w-3" />
+                <span>Listen</span>
+              </button>
+            )}
 
-                {appearanceSlot}
-              </div>
+            {headerActionSlot}
+
+            {/* Appearance / Theme Drawer */}
+            <div className="relative" ref={appearanceRef}>
+              <button
+                type="button"
+                onClick={() => setIsAppearanceOpen((open) => !open)}
+                className={`icon-button ${isAppearanceOpen ? 'active' : ''}`}
+                style={{ color: isAppearanceOpen ? 'var(--accent)' : 'var(--reader-muted)' }}
+                aria-haspopup="menu"
+                aria-expanded={isAppearanceOpen}
+                aria-label="Appearance"
+                title="Appearance"
+              >
+                <Type className="h-4 w-4" />
+              </button>
+
+              {isAppearanceOpen && (
+                <div
+                  className="menu right-0 top-full mt-1.5 w-64 space-y-3 p-3 z-50 shadow-2xl"
+                  style={{ '--menu-origin': 'top right' } as React.CSSProperties}
+                >
+                  <Section label="Theme">
+                    <div className="flex gap-1.5">
+                      {THEMES.map(({ key, label, icon: Icon }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => onThemeChange(key)}
+                          aria-pressed={theme === key}
+                          className={`flex flex-1 items-center justify-center gap-1 rounded-[var(--radius-sm)] border py-1.5 text-[11px] transition-colors duration-150 ${
+                            theme === key
+                              ? 'border-[var(--accent-ring)] bg-[var(--accent-muted)] text-[var(--accent)]'
+                              : 'border-transparent text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)]'
+                          }`}
+                        >
+                          <Icon className="h-3 w-3" />
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </Section>
+
+                  {appearanceSlot}
+                </div>
+              )}
+            </div>
+
+            {onToggleBookmark && (
+              <button
+                type="button"
+                onClick={onToggleBookmark}
+                className="icon-button"
+                style={{
+                  color: isCurrentLocationBookmarked ? 'var(--accent)' : 'var(--reader-muted)',
+                }}
+                aria-label={bookmarkLabel}
+                title={
+                  isCurrentLocationBookmarked
+                    ? 'Bookmarked (click to add another)'
+                    : bookmarkLabel
+                }
+              >
+                <Bookmark
+                  className={`h-4 w-4 ${isCurrentLocationBookmarked ? 'fill-current' : ''}`}
+                />
+              </button>
             )}
           </div>
 
-          {onToggleBookmark && (
-            <button
-              type="button"
-              onClick={onToggleBookmark}
-              className="icon-button"
-              style={{
-                color: isCurrentLocationBookmarked ? 'var(--accent)' : 'var(--reader-muted)',
-              }}
-              aria-label={bookmarkLabel}
-              title={
-                isCurrentLocationBookmarked
-                  ? 'Bookmarked (click to add another)'
-                  : bookmarkLabel
-              }
-            >
-              <Bookmark
-                className={`h-4 w-4 ${isCurrentLocationBookmarked ? 'fill-current' : ''}`}
-              />
-            </button>
-          )}
+          {/* Window Controls (Minimise, Maximise, Close) */}
+          <WindowControls />
         </div>
       </header>
 

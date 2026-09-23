@@ -366,6 +366,14 @@ function createMainWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  mainWindow.on('maximize', () => {
+    mainWindow?.webContents.send('window:maximized-changed', true);
+  });
+
+  mainWindow.on('unmaximize', () => {
+    mainWindow?.webContents.send('window:maximized-changed', false);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -443,6 +451,7 @@ ipcMain.handle('window:togglePin', () => {
   return isPinned;
 });
 ipcMain.handle('window:isPinned', () => isPinned);
+ipcMain.handle('window:isMaximized', () => mainWindow?.isMaximized() ?? false);
 
 ipcMain.on('thumbar:update', (_event, { isPlaying }: { isPlaying: boolean }) => {
   updateThumbarButtons(isPlaying);
@@ -922,6 +931,12 @@ ipcMain.handle('system:setThemeSource', async (_event, source: 'system' | 'dark'
     isDark: isDarkNow,
     accentColor: getSystemAccentColor(),
   };
+});
+
+/** Set titlebar overlay theme directly (e.g. for reader views) */
+ipcMain.handle('system:setTitleBarTheme', async (_event, isDark: boolean) => {
+  mainWindow?.setTitleBarOverlay(getTitleBarOverlay(isDark));
+  return true;
 });
 
 /** Return available Microsoft Edge neural voices */
