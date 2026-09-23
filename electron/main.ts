@@ -24,7 +24,13 @@ import { computeStableId, migrateLibraryState } from './id';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
-import { getMcpClients, installMcpClient, uninstallMcpClient, getMcpSnippet } from './mcpSetup';
+import {
+  configureMcpRuntime,
+  getMcpClients,
+  installMcpClient,
+  uninstallMcpClient,
+  getMcpSnippet,
+} from './mcpSetup';
 import type { AudioChapter, SynthesisOptions } from '../src/types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -892,6 +898,8 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(() => {
+    // mcpSetup takes these by injection so it stays importable without Electron.
+    configureMcpRuntime({ isPackaged: app.isPackaged, appPath: app.getAppPath() });
     protocol.handle('acuity', serveFile);
     registerAllowedRoot(getCoversDir());
     createMainWindow();

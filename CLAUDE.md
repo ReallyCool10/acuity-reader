@@ -11,19 +11,20 @@ custom-property token layer.
 This repository is unrelated to the other repositories that may be checked out alongside it in
 the same container. Ignore their `CLAUDE.md` files; they describe different products.
 
-## Shell: Electron, not Tauri
+## Shell
 
-`package.json` builds and runs **Electron**. A `src-tauri/` scaffold exists but nothing builds
-or runs it. Do not add features there, and do not follow it as a guide to how the app works.
-If the split is ever resolved, update `README.md` in the same change.
+**Electron.** The former `src-tauri/` scaffold has been removed; there is one shell.
 
 ## Commands
 
 ```bash
 npm run dev         # Vite dev server + Electron
 npm run typecheck   # renderer (tsconfig.json) AND main process (tsconfig.node.json)
-npm run build       # typecheck, then build renderer + main + preload
+npm run lint        # ESLint, including react-hooks rules
+npm test            # Vitest (jsdom)
+npm run build       # typecheck, build renderer + main + preload + MCP, assert CSS bundle
 npm start           # run the built app
+npm run dist        # electron-builder, Windows
 ```
 
 Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` is covered by
@@ -47,6 +48,14 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 7. **Chapter HTML must stay sanitised** before it reaches `dangerouslySetInnerHTML`. Sanitisation
    lives in `parseEpub`; do not render EPUB markup that has not been through it.
 8. **Blob URLs minted for embedded images must be revoked** when the reader unmounts.
+9. **Modules under `electron/` must not import `electron` at module scope** unless they genuinely
+   need the app object at import time. A static `import { app } from 'electron'` forces anything
+   importing that module - including a unit test of pure logic - to resolve the Electron binary.
+   Inject host values instead, as `mcpSetup.configureMcpRuntime` does.
+10. **Read-aloud has two engines, and the default one is online.** Microsoft's neural voices
+    transmit the text being narrated to a Microsoft endpoint; the system voice does not. Any
+    change to engine selection, defaults or fallback must keep the disclosure in the reader's
+    voice picker and the Privacy section of `README.md` accurate.
 
 ## UI conventions
 
@@ -73,9 +82,16 @@ README status table.
 
 ## Testing
 
-There is no test framework here yet. When adding one, prefer Vitest with a DOM environment. The
-highest-value targets are `src/lib/epub.ts`, `src/lib/narration.ts` and the path-containment
-logic in `electron/main.ts`.
+Vitest in a jsdom environment; `src/test/setup.ts` stubs the jsdom gaps (`URL.createObjectURL`,
+`ResizeObserver`, `scrollIntoView`). Tests sit beside their source.
+
+`npm run build` asserts a CSS bundle was emitted - keep that check. It guards the failure mode
+where the stylesheet is not imported, every utility class silently does nothing, and the build
+still succeeds.
+
+Note that `react-hooks/set-state-in-effect` is deliberately a warning rather than an error; see
+the comment in `eslint.config.js`. Do not silence hook warnings with inline disables - an
+`eslint-disable` for `exhaustive-deps` previously concealed a genuine callback cycle.
 
 ## Commit messages
 
