@@ -57,7 +57,9 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   /** Set while restoring a saved position, to stop the scroll handler overwriting it. */
   const restoringRef = useRef(false);
   const onMetadataUpdateRef = useRef(onMetadataUpdate);
-  onMetadataUpdateRef.current = onMetadataUpdate;
+  useEffect(() => {
+    onMetadataUpdateRef.current = onMetadataUpdate;
+  });
 
   const [chapters, setChapters] = useState<EpubChapter[]>([]);
   const [bookMeta, setBookMeta] = useState<{ title?: string; author?: string }>({});

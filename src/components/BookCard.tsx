@@ -17,7 +17,7 @@ interface BookCardProps {
  * palette keeps a given book visually stable across rescans, so the shelf does
  * not reshuffle its colours every time the library is refreshed.
  */
-const JACKET_THEMES = [
+export const JACKET_THEMES = [
   { from: '#232630', to: '#0b0c0f', ink: '#f0e4cc', accent: '#d9b169' },
   { from: '#43141f', to: '#140407', ink: '#f7dde2', accent: '#e79aa8' },
   { from: '#0f2b23', to: '#04100c', ink: '#d9f2e6', accent: '#6cc9a2' },
@@ -26,7 +26,7 @@ const JACKET_THEMES = [
   { from: '#2c1540', to: '#0c0512', ink: '#ead9f6', accent: '#b384d8' },
 ];
 
-function themeForTitle(title: string) {
+export function themeForTitle(title: string) {
   let hash = 0;
   for (let i = 0; i < title.length; i++) {
     hash = (hash << 5) - hash + title.charCodeAt(i);

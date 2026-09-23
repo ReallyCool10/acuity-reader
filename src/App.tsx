@@ -56,6 +56,7 @@ export default function App() {
   };
 
   const [activeAudioItem, setActiveAudioItem] = useState<MediaItem | null>(null);
+  const [isAudioFullScreen, setIsAudioFullScreen] = useState(false);
   const [activeBookItem, setActiveBookItem] = useState<MediaItem | null>(null);
 
   const searchRef = useRef<HTMLInputElement | null>(null);
@@ -304,8 +305,12 @@ export default function App() {
   /* ------------------------------------------------------------ opening */
 
   const openItem = useCallback((item: MediaItem) => {
-    if (item.mediaType === 'audio') setActiveAudioItem(item);
-    else setActiveBookItem(item);
+    if (item.mediaType === 'audio') {
+      setActiveAudioItem(item);
+      setIsAudioFullScreen(true);
+    } else {
+      setActiveBookItem(item);
+    }
   }, []);
 
   const findByPath = useCallback(
@@ -522,6 +527,10 @@ export default function App() {
       }
 
       if (event.key === 'Escape') {
+        if (isAudioFullScreen) {
+          setIsAudioFullScreen(false);
+          return;
+        }
         if (activeCollectionId) {
           setActiveCollectionId(null);
           return;
@@ -557,6 +566,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
     activeAudioItem,
+    isAudioFullScreen,
     activeBookItem,
     isSettingsOpen,
     activeCollectionId,
@@ -733,9 +743,14 @@ export default function App() {
         <AudioPlayerBar
           key={activeAudioItem.id}
           item={activeAudioItem}
+          isFullScreen={isAudioFullScreen}
+          onFullScreenChange={setIsAudioFullScreen}
           initialTime={library.progress[activeAudioItem.id]?.currentTime ?? 0}
           bookmarks={library.bookmarks[activeAudioItem.id] ?? []}
-          onClose={() => setActiveAudioItem(null)}
+          onClose={() => {
+            setIsAudioFullScreen(false);
+            setActiveAudioItem(null);
+          }}
           onProgressUpdate={handleAudioProgress}
           onAddBookmark={(itemId, time) =>
             addBookmark(itemId, time, `Bookmark at ${Math.round(time / 60)} min`)
@@ -746,6 +761,7 @@ export default function App() {
           hasNextTrack={Boolean(siblingTracks.nextItem)}
           hasPrevTrack={Boolean(siblingTracks.prevItem)}
           onSwitchToCompanion={(companionPath) => {
+            setIsAudioFullScreen(false);
             const companion = findByPath(companionPath);
             if (companion) setActiveBookItem(companion);
           }}

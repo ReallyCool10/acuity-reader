@@ -9,25 +9,25 @@ export function cleanTitleString(raw: string): string {
   // 1. Strip domain/website/shadow-library tags in parentheses or brackets:
   // e.g. (zblibrary.sk1lib.sk, z-lib.sk), (z-lib.org), [libgen.li], (oceanofpdf.com), (annas-archive)
   s = s.replace(
-    /[([\]\s*[^)\]]*(?:zblibrary|z-lib|zlib|1lib|b-ok|libgen|oceanofpdf|annas-archive|pdfdrive|sk1lib|\.(?:sk|org|com|net|ru|io|is|to|me|li|in|la|rs|ec|lc|gd|info))\b[^)\]]*[)\]]/gi,
+    /[([][^)\]]*(?:zblibrary|z-lib|zlib|1lib|b-ok|libgen|oceanofpdf|annas-archive|pdfdrive|sk1lib|\.(?:sk|org|com|net|ru|io|is|to|me|li|in|la|rs|ec|lc|gd|info))\b[^)\]]*[)\]]/gi,
     ' '
   );
 
   // 2. Strip publication year / edition tags in parentheses or brackets:
   // e.g. (2011 etc.), (2011, Penguin), (2019), [2020]
   s = s.replace(
-    /[([\]\s*(?:(?:19|20)\d{2}(?:\s*(?:etc\.?|edition|ed\.?|publisher|pub\.?|,.*))?)\s*[)\]]/gi,
+    /[([][^)\]]*(?:(?:19|20)\d{2}(?:\s*(?:etc\.?|edition|ed\.?|publisher|pub\.?|,.*))?)\s*[)\]]/gi,
     ' '
   );
 
   // 3. Strip loose etc., edition, revised tags in parentheses or brackets
-  s = s.replace(/[([\]\s*(?:(?:\d+(?:st|nd|rd|th)\s+)?(?:edition|ed\.?)|etc\.?|revised(?:\s+ed\.?)?)\s*[)\]]/gi, ' ');
+  s = s.replace(/[([][\s]*(?:(?:\d+(?:st|nd|rd|th)\s+)?(?:edition|ed\.?)|etc\.?|revised(?:\s+ed\.?)?)\s*[)\]]/gi, ' ');
 
   // 4. Strip stray unbalanced trailing patterns from downloads: e.g. '2011 etc.)', 'z-lib.sk)'
   s = s.replace(/(?:[\s,_-]+|\()(?:\d{4}\s+etc\.?|etc\.?|z-lib[^)]*|zblibrary[^)]*)\)+/gi, ' ');
 
   // 5. Strip empty leftover parentheses or brackets
-  s = s.replace(/[([\]\s*[)\]]/g, ' ');
+  s = s.replace(/[([][\s]*[)\]]/g, ' ');
 
   // 6. Strip trailing punctuation, dashes, spaces
   s = s.replace(/[\s\-_–—]+$/, '').trim();

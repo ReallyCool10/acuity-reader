@@ -52,9 +52,11 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const restoringRef = useRef(false);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
   const onMetadataUpdateRef = useRef(onMetadataUpdate);
-  onMetadataUpdateRef.current = onMetadataUpdate;
   const itemRef = useRef(item);
-  itemRef.current = item;
+  useEffect(() => {
+    onMetadataUpdateRef.current = onMetadataUpdate;
+    itemRef.current = item;
+  });
 
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [pdfInfo, setPdfInfo] = useState<PdfDocumentInfo | null>(null);

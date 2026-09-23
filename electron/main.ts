@@ -323,11 +323,29 @@ function createMainWindow() {
     },
   });
 
-  // Painting before first frame causes a white flash against the Mica backdrop.
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
+  const showWindow = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
     updateThumbarButtons(false);
+  };
+
+  // Painting before first frame causes a white flash against the Mica backdrop.
+  mainWindow.once('ready-to-show', showWindow);
+
+  // If first paint stalls or ready-to-show is delayed, ensure window is shown after load.
+  mainWindow.webContents.once('did-finish-load', () => {
+    setTimeout(showWindow, 150);
   });
+
+  // Safety fallback: ensure the panel always opens on launch even if Chromium paint stalls.
+  const safetyTimer = setTimeout(showWindow, 1000);
+  mainWindow.once('show', () => clearTimeout(safetyTimer));
 
   mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
     logError('did-fail-load', `${code} ${desc}`);
@@ -941,8 +959,11 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', () => {
     if (mainWindow) {
+      if (!mainWindow.isVisible()) mainWindow.show();
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
+    } else {
+      createMainWindow();
     }
   });
 
@@ -966,7 +987,13 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
+  if (BrowserWindow.getAllWindows().length === 0 || !mainWindow) {
+    createMainWindow();
+  } else {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
 });
 
 // Any debounced save must reach disk before the process exits.

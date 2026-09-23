@@ -289,5 +289,178 @@ describe('AudioPlayerBar', () => {
       root.unmount();
     });
   });
+
+  it('renders full-screen mode with cover artwork and allows minimizing', async () => {
+    const itemWithCover: MediaItem = {
+      ...mockItem,
+      id: 'test-audio-cover',
+      coverUrl: 'C:/Audio/cover.jpg',
+    };
+    const onFullScreenChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={itemWithCover}
+          isFullScreen={true}
+          onFullScreenChange={onFullScreenChange}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain('Audiobook Player');
+    expect(container.textContent).toContain('Great Audiobook');
+    expect(container.textContent).toContain('Jane Doe');
+
+    const coverImg = container.querySelector('img[alt="Great Audiobook"]');
+    expect(coverImg).toBeDefined();
+
+    const minimizeBtn = container.querySelector('button[aria-label="Minimize player to bar (Esc)"]') as HTMLButtonElement | null;
+    expect(minimizeBtn).toBeDefined();
+
+    await act(async () => {
+      minimizeBtn?.click();
+    });
+
+    expect(onFullScreenChange).toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('renders clean procedural cloth jacket fallback when no cover image exists', async () => {
+    const itemNoCover: MediaItem = {
+      ...mockItem,
+      id: 'test-audio-nocover',
+      coverUrl: undefined,
+    };
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={itemNoCover}
+          isFullScreen={true}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    expect(container.textContent).toContain('Audiobook Player');
+    expect(container.textContent).toContain('Audiobook');
+    expect(container.textContent).toContain('Great Audiobook');
+    expect(container.textContent).toContain('Jane Doe');
+
+    // No img element rendered when coverUrl is undefined
+    const coverImg = container.querySelector('img');
+    expect(coverImg).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('switches to fallback jacket if cover image fails to load', async () => {
+    const itemBadCover: MediaItem = {
+      ...mockItem,
+      id: 'test-audio-badcover',
+      coverUrl: 'C:/Audio/nonexistent.jpg',
+    };
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={itemBadCover}
+          isFullScreen={true}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const img = container.querySelector('img');
+    expect(img).toBeDefined();
+
+    await act(async () => {
+      img?.dispatchEvent(new Event('error'));
+    });
+
+    // Fallback jacket should now be shown
+    expect(container.textContent).toContain('Audiobook');
+    expect(container.textContent).toContain('Great Audiobook');
+    expect(container.querySelector('img')).toBeNull();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('minimizes full-screen mode when Escape key is pressed', async () => {
+    const onFullScreenChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={mockItem}
+          isFullScreen={true}
+          onFullScreenChange={onFullScreenChange}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+
+    expect(onFullScreenChange).toHaveBeenCalledWith(false);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('expands to full-screen mode when maximize button is clicked in minimized bottom bar', async () => {
+    const onFullScreenChange = vi.fn();
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={mockItem}
+          isFullScreen={false}
+          onFullScreenChange={onFullScreenChange}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const expandBtn = container.querySelector('button[aria-label="Expand to full screen"]') as HTMLButtonElement | null;
+    expect(expandBtn).toBeDefined();
+
+    await act(async () => {
+      expandBtn?.click();
+    });
+
+    expect(onFullScreenChange).toHaveBeenCalledWith(true);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });
 

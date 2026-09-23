@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpen,
   Bookmark,
-  ChevronDown,
   Headphones,
   ListMusic,
+  Maximize2,
+  Minimize2,
   Moon,
   Pause,
   Play,
@@ -25,10 +26,14 @@ import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { useDismissable } from '../hooks/useDismissable';
 import { Scrubber } from './Scrubber';
+import { themeForTitle } from './BookCard';
 
-interface AudioPlayerBarProps {
+export interface AudioPlayerBarProps {
   item: MediaItem;
   initialTime?: number;
+  initialFullScreen?: boolean;
+  isFullScreen?: boolean;
+  onFullScreenChange?: (fullScreen: boolean) => void;
   bookmarks?: BookmarkType[];
   onClose: () => void;
   onProgressUpdate: (itemId: string, currentTime: number, duration: number) => void;
@@ -55,6 +60,9 @@ const SLEEP_PRESETS: { label: string; minutes: number | null }[] = [
 export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   item,
   initialTime = 0,
+  initialFullScreen = false,
+  isFullScreen: controlledFullScreen,
+  onFullScreenChange,
   bookmarks = [],
   onClose,
   onProgressUpdate,
@@ -82,8 +90,39 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const [isChaptersOpen, setIsChaptersOpen] = useState(false);
   const [sleepMinutes, setSleepMinutes] = useState<number | null>(null);
   const [sleepSecondsLeft, setSleepSecondsLeft] = useState<number | null>(null);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [internalFullScreen, setInternalFullScreen] = useState(initialFullScreen);
+  const [failedCoverId, setFailedCoverId] = useState<string | null>(null);
+  const coverFailed = failedCoverId === item.id;
   const [error, setError] = useState<string | null>(null);
+
+  const isFullScreen = controlledFullScreen !== undefined ? controlledFullScreen : internalFullScreen;
+  const setIsFullScreen = useCallback(
+    (next: boolean | ((prev: boolean) => boolean)) => {
+      setIsSpeedOpen(false);
+      setIsSleepOpen(false);
+      setIsChaptersOpen(false);
+      setIsBookmarksOpen(false);
+      const resolved = typeof next === 'function' ? next(isFullScreen) : next;
+      if (controlledFullScreen === undefined) {
+        setInternalFullScreen(resolved);
+      }
+      onFullScreenChange?.(resolved);
+    },
+    [controlledFullScreen, isFullScreen, onFullScreenChange]
+  );
+
+  useEffect(() => {
+    if (!isFullScreen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsFullScreen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [isFullScreen, setIsFullScreen]);
 
   // Playback preferences outlive any single title.
   const [playbackRate, setPlaybackRate] = usePersistentState('acuity.playbackRate', 1);
@@ -123,6 +162,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const src = useMemo(() => mediaUrl(item.filePath), [item.filePath]);
   const cover = coverUrl(item);
   const displayTitle = useMemo(() => cleanTitleString(item.title) || item.title, [item.title]);
+  const jacketTheme = useMemo(() => themeForTitle(displayTitle), [displayTitle]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -226,7 +266,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
   /* Taskbar thumbnail buttons and the tray menu drive the same transport. */
   useEffect(() => {
-    const unbind = window.electronAPI?.onPlayerCommand((command) => {
+    const unbind = window.electronAPI?.onPlayerCommand?.((command) => {
       if (command === 'toggle-play') togglePlay();
       else if (command === 'skip-back') skip(-SKIP_SECONDS);
       else if (command === 'skip-forward') skip(SKIP_SECONDS);
@@ -353,11 +393,306 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
   const VolumeIcon = isMuted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
 
+  const renderSpeedControl = () => (
+    <div className="relative" ref={speedRef}>
+      <button
+        type="button"
+        onClick={() => setIsSpeedOpen((open) => !open)}
+        className="rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]"
+        aria-haspopup="menu"
+        aria-expanded={isSpeedOpen}
+        aria-label={`Playback speed, currently ${playbackRate} times`}
+        title={`Playback speed: ${playbackRate}×`}
+      >
+        {playbackRate}×
+      </button>
+
+      {isSpeedOpen && (
+        <div className="menu bottom-full left-0 mb-1.5 z-50" role="menu">
+          {SPEEDS.map((rate) => (
+            <button
+              key={rate}
+              type="button"
+              role="menuitemradio"
+              aria-checked={playbackRate === rate}
+              className="menu-item"
+              onClick={() => {
+                setPlaybackRate(rate);
+                setIsSpeedOpen(false);
+              }}
+            >
+              {rate}×
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderSleepControl = () => (
+    <div className="relative" ref={sleepRef}>
+      <button
+        type="button"
+        onClick={() => setIsSleepOpen((open) => !open)}
+        className={`flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums transition-colors duration-150 ${
+          sleepSecondsLeft !== null
+            ? 'bg-[var(--accent)] text-[var(--text-inverse)]'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
+        }`}
+        aria-haspopup="menu"
+        aria-expanded={isSleepOpen}
+        aria-label={
+          sleepSecondsLeft !== null
+            ? `Sleep timer active, ${Math.ceil(sleepSecondsLeft / 60)} minutes remaining`
+            : 'Set sleep timer'
+        }
+        title={
+          sleepSecondsLeft !== null
+            ? `Sleep timer: ${Math.ceil(sleepSecondsLeft / 60)}m left`
+            : 'Sleep timer'
+        }
+      >
+        <Moon className="h-3.5 w-3.5" />
+        {sleepSecondsLeft !== null && (
+          <span>{Math.ceil(sleepSecondsLeft / 60)}m</span>
+        )}
+      </button>
+
+      {isSleepOpen && (
+        <div className="menu bottom-full left-0 mb-1.5 min-w-[130px] z-50" role="menu">
+          <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+            Sleep timer
+          </div>
+          {SLEEP_PRESETS.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              role="menuitemradio"
+              aria-checked={sleepMinutes === preset.minutes}
+              className={`menu-item ${sleepMinutes === preset.minutes ? 'font-semibold text-[var(--accent)]' : ''}`}
+              onClick={() => selectSleepPreset(preset.minutes)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderChaptersControl = (alignRight = true) => {
+    if (chapters.length === 0) return null;
+    return (
+      <div className="relative" ref={chaptersRef}>
+        <button
+          type="button"
+          onClick={() => setIsChaptersOpen((open) => !open)}
+          className={`icon-button relative ${isChaptersOpen ? 'text-[var(--accent)] bg-[var(--surface-raised)]' : ''}`}
+          aria-label="Chapters"
+          title="Chapters"
+        >
+          <ListMusic className="h-3.5 w-3.5" />
+          <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
+            {chapters.length}
+          </span>
+        </button>
+
+        {isChaptersOpen && (
+          <div
+            className={`menu bottom-full ${alignRight ? 'right-0' : 'left-0'} mb-2 max-h-64 w-72 overflow-y-auto p-2 z-50`}
+            role="dialog"
+            aria-label="Chapters"
+          >
+            <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+                Chapters ({chapters.length})
+              </span>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              {chapters.map((chap, idx) => {
+                const isCurrent = activeChapter?.id === chap.id;
+                return (
+                  <button
+                    key={chap.id}
+                    type="button"
+                    onClick={() => {
+                      seekTo(chap.startTime);
+                      setIsChaptersOpen(false);
+                    }}
+                    className={`flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[12px] transition-colors ${
+                      isCurrent
+                        ? 'bg-[var(--accent)]/15 text-[var(--accent)] font-medium'
+                        : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]'
+                    }`}
+                  >
+                    <span className="truncate pr-2">
+                      {idx + 1}. {chap.title}
+                    </span>
+                    <span className="shrink-0 text-[10.5px] tabular-nums opacity-60">
+                      {formatTime(chap.startTime)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderBookmarksControl = (alignRight = true) => (
+    <div className="relative" ref={bookmarksRef}>
+      <button
+        type="button"
+        onClick={() => setIsBookmarksOpen((open) => !open)}
+        className="icon-button relative"
+        aria-label="Bookmarks"
+        title="Bookmarks"
+      >
+        <Bookmark className="h-3.5 w-3.5" />
+        {bookmarks.length > 0 && (
+          <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
+            {bookmarks.length}
+          </span>
+        )}
+      </button>
+
+      {isBookmarksOpen && (
+        <div
+          className={`menu bottom-full ${alignRight ? 'right-0' : 'left-0'} mb-2 max-h-64 w-72 overflow-y-auto p-2 z-50`}
+          role="dialog"
+          aria-label="Bookmarks"
+        >
+          <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
+              Bookmarks ({bookmarks.length})
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onAddBookmark(item.id, currentTime);
+              }}
+              className="flex items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--surface-raised)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-raised-hover)]"
+            >
+              + Add here
+            </button>
+          </div>
+
+          {bookmarks.length === 0 ? (
+            <p className="py-4 text-center text-[11px] text-[var(--text-tertiary)]">
+              No bookmarks yet. Click "+ Add here" to save your spot.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {bookmarks.map((bm) => (
+                <div
+                  key={bm.id}
+                  className="group flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-[var(--surface-raised-hover)]"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      seekTo(bm.position);
+                      setIsBookmarksOpen(false);
+                    }}
+                    className="flex flex-1 flex-col truncate"
+                  >
+                    <span className="text-[11.5px] font-medium text-[var(--text-primary)]">
+                      {formatTime(bm.position)}
+                    </span>
+                    <span className="truncate text-[10.5px] text-[var(--text-tertiary)]">
+                      {bm.label}
+                    </span>
+                  </button>
+                  {onRemoveBookmark && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveBookmark(bm.id);
+                      }}
+                      className="icon-button opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                      aria-label="Delete bookmark"
+                      title="Delete bookmark"
+                    >
+                      <Trash2 className="h-3 w-3 text-red-400" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const renderVolumeControl = (isCompact = true) => {
+    if (isCompact) {
+      return (
+        <div className="group flex w-20 items-center justify-end gap-1">
+          <div className="w-0 overflow-hidden transition-[width] duration-200 ease-[var(--ease-out)] group-hover:w-14 group-focus-within:w-14">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={isMuted ? 0 : volume}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                setVolume(next);
+                setIsMuted(next === 0);
+              }}
+              aria-label="Volume"
+              className="h-1 w-14 cursor-pointer accent-[var(--accent)]"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsMuted(!isMuted)}
+            className="icon-button"
+            aria-label={isMuted ? 'Unmute' : 'Mute'}
+            title={isMuted ? 'Unmute' : 'Mute'}
+          >
+            <VolumeIcon className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={() => setIsMuted(!isMuted)}
+          className="icon-button"
+          aria-label={isMuted ? 'Unmute' : 'Mute'}
+          title={isMuted ? 'Unmute' : 'Mute'}
+        >
+          <VolumeIcon className="h-4 w-4" />
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={isMuted ? 0 : volume}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            setVolume(next);
+            setIsMuted(next === 0);
+          }}
+          aria-label="Volume"
+          className="h-1.5 w-20 sm:w-24 cursor-pointer accent-[var(--accent)]"
+        />
+      </div>
+    );
+  };
+
   return (
-    <div
-      className="acu-no-drag relative z-40 shrink-0 border-t border-[var(--stroke-subtle)] bg-[var(--surface-base)] backdrop-blur-2xl"
-      style={{ boxShadow: '0 -8px 28px -12px rgba(0,0,0,0.6)' }}
-    >
+    <>
       <audio
         ref={audioRef}
         src={src}
@@ -376,29 +711,255 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         onError={() => setError('This file could not be played.')}
       />
 
-      {/* Expanded "now playing" panel, mirroring Media Player's full-screen view. */}
-      {isExpanded && (
-        <div className="animate-fade-rise flex flex-col items-center gap-3 border-b border-[var(--stroke-subtle)] px-6 pb-5 pt-6">
-          {cover ? (
-            <img
-              src={cover}
-              alt=""
-              className="h-40 w-auto rounded-[var(--radius-md)] shadow-[var(--shadow-xl)]"
-            />
-          ) : (
-            <div className="flex h-40 w-28 items-center justify-center rounded-[var(--radius-md)] bg-[var(--surface-raised)] shadow-[var(--shadow-lg)]">
-              <Headphones className="h-8 w-8 text-[var(--accent)]" />
+      {isFullScreen ? (
+        <div className="fixed inset-0 z-50 flex flex-col bg-[var(--surface-overlay)] backdrop-blur-3xl animate-reader-in select-none text-[var(--text-primary)]">
+          {/* Header Bar */}
+          <header
+            className="acu-drag relative z-40 flex shrink-0 items-center justify-between border-b border-[var(--stroke-subtle)] px-3 backdrop-blur-xl"
+            style={{ height: 'var(--titlebar-height, 40px)' }}
+          >
+            {/* Left: Minimize button */}
+            <div className="acu-no-drag flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setIsFullScreen(false)}
+                className="group flex items-center gap-1.5 rounded-[var(--radius-md)] px-2.5 py-1 text-[12px] font-medium text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]"
+                aria-label="Minimize player to bar (Esc)"
+                title="Minimize player to bar (Esc)"
+              >
+                <Minimize2 className="h-3.5 w-3.5 transition-transform duration-200 group-hover:-translate-y-0.5" />
+                <span>Minimize</span>
+              </button>
             </div>
-          )}
-          <div className="text-center">
-            <p className="font-serif text-[15px] font-semibold text-[var(--text-primary)]">{displayTitle}</p>
-            <p className="mt-0.5 text-[12px] text-[var(--text-tertiary)]">{item.author}</p>
-            {remaining > 0 && (
-              <p className="mt-1.5 text-[11px] text-[var(--text-tertiary)]">{formatRemaining(remaining)}</p>
-            )}
+
+            {/* Center: Now Playing indicator */}
+            <div className="pointer-events-none min-w-0 flex-1 px-4 text-center">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
+                Audiobook Player
+              </span>
+            </div>
+
+            {/* Right: Companion eBook switch & Close button */}
+            <div
+              className="acu-no-drag flex items-center gap-1.5"
+              style={{
+                paddingRight:
+                  'calc(100vw - env(titlebar-area-width, calc(100vw - 140px)) - env(titlebar-area-x, 0px))',
+              }}
+            >
+              {item.companionPath && onSwitchToCompanion && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsFullScreen(false);
+                    onSwitchToCompanion(item.companionPath!);
+                  }}
+                  className="flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--accent-ring)] bg-[var(--accent-muted)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] transition-colors duration-150 hover:bg-[rgba(240,178,50,0.24)]"
+                  title="Open the companion text edition"
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  <span>Read eBook</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={onClose}
+                className="icon-button"
+                aria-label="Close player"
+                title="Close player"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </header>
+
+          {/* Main Stage */}
+          <div className="flex flex-1 flex-col items-center justify-between overflow-y-auto px-6 py-6 sm:py-8 acu-no-drag">
+            <div className="my-auto flex w-full max-w-lg flex-col items-center justify-center">
+              {error && (
+                <p role="alert" className="mb-4 px-3 py-1 rounded bg-red-500/10 text-xs text-red-400 border border-red-500/20">
+                  {error}
+                </p>
+              )}
+
+              {/* Cover Artwork / Fallback Jacket */}
+              <div className="relative mb-6">
+                <div className="absolute -inset-4 rounded-3xl bg-[var(--accent)]/15 blur-2xl opacity-60 pointer-events-none" />
+                {cover && !coverFailed ? (
+                  <img
+                    src={cover}
+                    alt={displayTitle}
+                    onError={() => setFailedCoverId(item.id)}
+                    className="relative z-10 max-h-[280px] sm:max-h-[340px] max-w-[280px] sm:max-w-[340px] w-auto h-auto rounded-[var(--radius-lg)] shadow-[0_20px_50px_rgba(0,0,0,0.6)] object-contain border border-white/10"
+                  />
+                ) : (
+                  <div
+                    className="relative z-10 flex h-[280px] sm:h-[340px] w-[200px] sm:w-[240px] flex-col justify-between rounded-[var(--radius-lg)] p-6 shadow-[0_20px_50px_rgba(0,0,0,0.6)] border border-white/10"
+                    style={{
+                      background: `linear-gradient(145deg, ${jacketTheme.from}, ${jacketTheme.to})`,
+                      color: jacketTheme.ink,
+                    }}
+                  >
+                    {/* Inner debossed foil frame */}
+                    <div
+                      className="pointer-events-none absolute inset-2.5 rounded-[var(--radius-md)] border opacity-70"
+                      style={{ borderColor: `${jacketTheme.accent}33` }}
+                    />
+                    <div className="relative flex items-center justify-between">
+                      <span
+                        className="text-[9px] font-semibold uppercase tracking-[0.16em]"
+                        style={{ color: jacketTheme.accent }}
+                      >
+                        Audiobook
+                      </span>
+                      <Headphones className="h-3.5 w-3.5" style={{ color: jacketTheme.accent }} />
+                    </div>
+
+                    <div className="relative my-auto px-1 text-center">
+                      <h2
+                        className="line-clamp-5 font-serif text-[17px] sm:text-[19px] font-bold leading-snug"
+                        style={{ color: jacketTheme.ink }}
+                      >
+                        {displayTitle}
+                      </h2>
+                      {item.author && (
+                        <p
+                          className="mt-3 truncate text-[10.5px] font-semibold uppercase tracking-[0.18em]"
+                          style={{ color: jacketTheme.accent }}
+                        >
+                          {item.author}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="relative flex justify-center">
+                      <div
+                        className="h-[2px] w-8 rounded-full opacity-60"
+                        style={{ background: jacketTheme.accent }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Title & Author */}
+              <div className="text-center max-w-md w-full px-2">
+                <h1 className="font-serif text-2xl sm:text-3xl font-bold tracking-tight text-[var(--text-primary)] line-clamp-2">
+                  {displayTitle}
+                </h1>
+                {item.author && (
+                  <p className="mt-1.5 text-sm sm:text-base font-medium text-[var(--text-secondary)]">
+                    {item.author}
+                  </p>
+                )}
+                {activeChapter && (
+                  <p className="mt-1 text-xs font-medium text-[var(--accent)] truncate">
+                    {activeChapter.title}
+                  </p>
+                )}
+              </div>
+
+              {/* Timeline Scrubber */}
+              <div className="mt-6 w-full max-w-md">
+                <Scrubber
+                  value={currentTime}
+                  max={duration}
+                  onSeek={seekTo}
+                  onPreview={setPreviewTime}
+                  ariaLabel="Seek through the audiobook"
+                  formatValue={(v) => `${formatTime(v)} of ${formatTime(duration)}`}
+                  chapters={chapters}
+                />
+                <div className="mt-1.5 flex items-center justify-between text-xs tabular-nums text-[var(--text-tertiary)]">
+                  <span>{formatTime(displayTime)}</span>
+                  <span>{remaining > 0 ? `-${formatRemaining(remaining)}` : formatTime(duration)}</span>
+                </div>
+              </div>
+
+              {/* Primary Transport Controls */}
+              <div className="mt-6 flex items-center justify-center gap-4 sm:gap-6">
+                <button
+                  type="button"
+                  onClick={handlePrev}
+                  disabled={!canGoPrev}
+                  className={`icon-button h-11 w-11 ${!canGoPrev ? 'cursor-not-allowed opacity-30 hover:bg-transparent' : ''}`}
+                  aria-label={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
+                  title={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
+                >
+                  <SkipBack className="h-5 w-5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => skip(-SKIP_SECONDS)}
+                  className="icon-button h-12 w-12"
+                  aria-label="Back 15 seconds"
+                  title="Back 15 seconds"
+                >
+                  <RotateCcw className="h-5 w-5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={togglePlay}
+                  className="flex h-16 w-16 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--text-inverse)] shadow-[var(--shadow-xl)] transition-all duration-150 ease-[var(--ease-out)] hover:scale-105 hover:bg-[var(--accent-hover)] active:scale-95"
+                  aria-label={isPlaying ? 'Pause' : 'Play'}
+                  title={isPlaying ? 'Pause' : 'Play'}
+                >
+                  {isPlaying ? (
+                    <Pause className="h-7 w-7 fill-current" />
+                  ) : (
+                    <Play className="ml-1 h-7 w-7 fill-current" />
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => skip(SKIP_SECONDS)}
+                  className="icon-button h-12 w-12"
+                  aria-label="Forward 15 seconds"
+                  title="Forward 15 seconds"
+                >
+                  <RotateCw className="h-5 w-5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleNext}
+                  disabled={!canGoNext}
+                  className={`icon-button h-11 w-11 ${!canGoNext ? 'cursor-not-allowed opacity-30 hover:bg-transparent' : ''}`}
+                  aria-label={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
+                  title={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
+                >
+                  <SkipForward className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Bottom Utilities Toolbar */}
+            <div className="mt-8 flex w-full max-w-md items-center justify-between border-t border-[var(--stroke-subtle)] pt-4">
+              <div className="flex items-center gap-1.5">
+                {renderSpeedControl()}
+                {renderSleepControl()}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {renderChaptersControl(false)}
+                {renderBookmarksControl(false)}
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                {renderVolumeControl(false)}
+              </div>
+            </div>
           </div>
         </div>
-      )}
+      ) : (
+        <div
+          className="acu-no-drag relative z-40 shrink-0 border-t border-[var(--stroke-subtle)] bg-[var(--surface-base)] backdrop-blur-2xl"
+          style={{ boxShadow: '0 -8px 28px -12px rgba(0,0,0,0.6)' }}
+        >
 
       <div className="flex flex-col gap-1.5 px-3 pb-2.5 pt-2">
         {error && (
@@ -411,195 +972,73 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         <div className="flex items-center gap-2.5">
           <button
             type="button"
-            onClick={() => setIsExpanded((open) => !open)}
-            aria-expanded={isExpanded}
-            aria-label={isExpanded ? 'Collapse now playing' : 'Expand now playing'}
+            onClick={() => setIsFullScreen(true)}
+            aria-label="Expand to full screen"
+            title="Expand to full screen"
             className="group relative shrink-0 rounded-[var(--radius-sm)]"
           >
-            {cover ? (
+            {cover && !coverFailed ? (
               <img
                 src={cover}
                 alt=""
+                onError={() => setFailedCoverId(item.id)}
                 className="h-10 w-[30px] rounded-[3px] object-cover shadow-[var(--shadow-sm)]"
               />
             ) : (
-              <span className="flex h-10 w-[30px] items-center justify-center rounded-[3px] bg-[var(--surface-raised)]">
-                <Headphones className="h-3.5 w-3.5 text-[var(--accent)]" />
+              <span
+                className="flex h-10 w-[30px] items-center justify-center rounded-[3px]"
+                style={{
+                  background: `linear-gradient(145deg, ${jacketTheme.from}, ${jacketTheme.to})`,
+                }}
+              >
+                <Headphones className="h-3.5 w-3.5" style={{ color: jacketTheme.accent }} />
               </span>
             )}
             <span className="absolute inset-0 flex items-center justify-center rounded-[3px] bg-black/55 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-              <ChevronDown
-                className={`h-3.5 w-3.5 text-white transition-transform duration-200 ease-[var(--ease-out)] ${
-                  isExpanded ? '' : 'rotate-180'
-                }`}
-              />
+              <Maximize2 className="h-3.5 w-3.5 text-white" />
             </span>
           </button>
 
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">{displayTitle}</p>
+          <button
+            type="button"
+            onClick={() => setIsFullScreen(true)}
+            className="min-w-0 flex-1 text-left"
+            title="Expand to full screen"
+          >
+            <p className="truncate text-[12.5px] font-medium text-[var(--text-primary)] hover:underline">
+              {displayTitle}
+            </p>
             <p className="truncate text-[11px] text-[var(--text-tertiary)]">
               {item.author}
               {activeChapter ? (
                 <span className="text-[var(--text-secondary)] font-medium"> • {activeChapter.title}</span>
               ) : null}
             </p>
-          </div>
+          </button>
 
-          <div className="flex shrink-0 items-center">
+          <div className="flex shrink-0 items-center gap-0.5">
             {item.companionPath && onSwitchToCompanion && (
               <button
                 type="button"
                 onClick={() => onSwitchToCompanion(item.companionPath!)}
                 className="icon-button"
-                aria-label="Open the text edition"
-                title="Open the text edition"
+                aria-label="Open the companion text edition"
+                title="Open the companion text edition"
               >
                 <BookOpen className="h-3.5 w-3.5" />
               </button>
             )}
-            {chapters.length > 0 && (
-              <div className="relative" ref={chaptersRef}>
-                <button
-                  type="button"
-                  onClick={() => setIsChaptersOpen((open) => !open)}
-                  className={`icon-button relative ${isChaptersOpen ? 'text-[var(--accent)] bg-[var(--surface-raised)]' : ''}`}
-                  aria-label="Chapters"
-                  title="Chapters"
-                >
-                  <ListMusic className="h-3.5 w-3.5" />
-                  <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
-                    {chapters.length}
-                  </span>
-                </button>
-
-                {isChaptersOpen && (
-                  <div
-                    className="menu bottom-full right-0 mb-2 max-h-64 w-72 overflow-y-auto p-2"
-                    role="dialog"
-                    aria-label="Chapters"
-                  >
-                    <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                        Chapters ({chapters.length})
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col gap-1">
-                      {chapters.map((chap, idx) => {
-                        const isCurrent = activeChapter?.id === chap.id;
-                        return (
-                          <button
-                            key={chap.id}
-                            type="button"
-                            onClick={() => {
-                              seekTo(chap.startTime);
-                              setIsChaptersOpen(false);
-                            }}
-                            className={`flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[12px] transition-colors ${
-                              isCurrent
-                                ? 'bg-[var(--accent)]/15 text-[var(--accent)] font-medium'
-                                : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised)] hover:text-[var(--text-primary)]'
-                            }`}
-                          >
-                            <span className="truncate pr-2">
-                              {idx + 1}. {chap.title}
-                            </span>
-                            <span className="shrink-0 text-[10.5px] tabular-nums opacity-60">
-                              {formatTime(chap.startTime)}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="relative" ref={bookmarksRef}>
-              <button
-                type="button"
-                onClick={() => setIsBookmarksOpen((open) => !open)}
-                className="icon-button relative"
-                aria-label="Bookmarks"
-                title="Bookmarks"
-              >
-                <Bookmark className="h-3.5 w-3.5" />
-                {bookmarks.length > 0 && (
-                  <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
-                    {bookmarks.length}
-                  </span>
-                )}
-              </button>
-
-              {isBookmarksOpen && (
-                <div
-                  className="menu bottom-full right-0 mb-2 max-h-64 w-72 overflow-y-auto p-2"
-                  role="dialog"
-                  aria-label="Bookmarks"
-                >
-                  <div className="mb-2 flex items-center justify-between border-b border-[var(--stroke-subtle)] pb-1.5">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
-                      Bookmarks ({bookmarks.length})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onAddBookmark(item.id, currentTime);
-                      }}
-                      className="flex items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--surface-raised)] px-2 py-0.5 text-[10.5px] font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-raised-hover)]"
-                    >
-                      + Add here
-                    </button>
-                  </div>
-
-                  {bookmarks.length === 0 ? (
-                    <p className="py-4 text-center text-[11px] text-[var(--text-tertiary)]">
-                      No bookmarks yet. Click "+ Add here" to save your spot.
-                    </p>
-                  ) : (
-                    <div className="flex flex-col gap-1">
-                      {bookmarks.map((bm) => (
-                        <div
-                          key={bm.id}
-                          className="group flex items-center justify-between rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors duration-150 hover:bg-[var(--surface-raised-hover)]"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              seekTo(bm.position);
-                              setIsBookmarksOpen(false);
-                            }}
-                            className="flex flex-1 flex-col truncate"
-                          >
-                            <span className="text-[11.5px] font-medium text-[var(--text-primary)]">
-                              {formatTime(bm.position)}
-                            </span>
-                            <span className="truncate text-[10.5px] text-[var(--text-tertiary)]">
-                              {bm.label}
-                            </span>
-                          </button>
-                          {onRemoveBookmark && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRemoveBookmark(bm.id);
-                              }}
-                              className="icon-button opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-                              aria-label="Delete bookmark"
-                              title="Delete bookmark"
-                            >
-                              <Trash2 className="h-3 w-3 text-red-400" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            {renderChaptersControl(true)}
+            {renderBookmarksControl(true)}
+            <button
+              type="button"
+              onClick={() => setIsFullScreen(true)}
+              className="icon-button"
+              aria-label="Expand to full screen"
+              title="Expand to full screen"
+            >
+              <Maximize2 className="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               onClick={onClose}
@@ -624,6 +1063,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             onPreview={setPreviewTime}
             ariaLabel="Seek through the audiobook"
             formatValue={(v) => `${formatTime(v)} of ${formatTime(duration)}`}
+            chapters={chapters}
           />
           <span className="w-11 shrink-0 text-[10.5px] tabular-nums text-[var(--text-tertiary)]">
             {formatTime(duration)}
@@ -633,87 +1073,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         {/* Transport */}
         <div className="flex items-center justify-between">
           <div className="flex w-24 items-center justify-start gap-1">
-            <div className="relative" ref={speedRef}>
-              <button
-                type="button"
-                onClick={() => setIsSpeedOpen((open) => !open)}
-                className="rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]"
-                aria-haspopup="menu"
-                aria-expanded={isSpeedOpen}
-                aria-label={`Playback speed, currently ${playbackRate} times`}
-              >
-                {playbackRate}×
-              </button>
-
-              {isSpeedOpen && (
-                <div className="menu bottom-full left-0 mb-1.5" role="menu">
-                  {SPEEDS.map((rate) => (
-                    <button
-                      key={rate}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={playbackRate === rate}
-                      className="menu-item"
-                      onClick={() => {
-                        setPlaybackRate(rate);
-                        setIsSpeedOpen(false);
-                      }}
-                    >
-                      {rate}×
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="relative" ref={sleepRef}>
-              <button
-                type="button"
-                onClick={() => setIsSleepOpen((open) => !open)}
-                className={`flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-[11px] font-semibold tabular-nums transition-colors duration-150 ${
-                  sleepSecondsLeft !== null
-                    ? 'bg-[var(--accent)] text-[var(--text-inverse)]'
-                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)]'
-                }`}
-                aria-haspopup="menu"
-                aria-expanded={isSleepOpen}
-                aria-label={
-                  sleepSecondsLeft !== null
-                    ? `Sleep timer active, ${Math.ceil(sleepSecondsLeft / 60)} minutes remaining`
-                    : 'Set sleep timer'
-                }
-                title={
-                  sleepSecondsLeft !== null
-                    ? `Sleep timer: ${Math.ceil(sleepSecondsLeft / 60)}m left`
-                    : 'Sleep timer'
-                }
-              >
-                <Moon className="h-3.5 w-3.5" />
-                {sleepSecondsLeft !== null && (
-                  <span>{Math.ceil(sleepSecondsLeft / 60)}m</span>
-                )}
-              </button>
-
-              {isSleepOpen && (
-                <div className="menu bottom-full left-0 mb-1.5 min-w-[130px]" role="menu">
-                  <div className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-tertiary)]">
-                    Sleep timer
-                  </div>
-                  {SLEEP_PRESETS.map((preset) => (
-                    <button
-                      key={preset.label}
-                      type="button"
-                      role="menuitemradio"
-                      aria-checked={sleepMinutes === preset.minutes}
-                      className={`menu-item ${sleepMinutes === preset.minutes ? 'font-semibold text-[var(--accent)]' : ''}`}
-                      onClick={() => selectSleepPreset(preset.minutes)}
-                    >
-                      {preset.label}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+            {renderSpeedControl()}
+            {renderSleepControl()}
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -774,36 +1135,11 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </button>
           </div>
 
-          {/* Volume: the slider reveals on hover, so the bar stays uncluttered. */}
-          <div className="group flex w-20 items-center justify-end gap-1">
-            <div className="w-0 overflow-hidden transition-[width] duration-200 ease-[var(--ease-out)] group-hover:w-14 group-focus-within:w-14">
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.01}
-                value={isMuted ? 0 : volume}
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  setVolume(next);
-                  setIsMuted(next === 0);
-                }}
-                aria-label="Volume"
-                className="h-1 w-14 cursor-pointer accent-[var(--accent)]"
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setIsMuted(!isMuted)}
-              className="icon-button"
-              aria-label={isMuted ? 'Unmute' : 'Mute'}
-              title={isMuted ? 'Unmute' : 'Mute'}
-            >
-              <VolumeIcon className="h-3.5 w-3.5" />
-            </button>
-          </div>
+          {renderVolumeControl(true)}
         </div>
       </div>
     </div>
-  );
+  )}
+</>
+);
 };
