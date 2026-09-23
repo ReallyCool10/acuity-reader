@@ -183,8 +183,7 @@ describe('AudioPlayerBar', () => {
     expect(container.textContent).toContain('Chapter 1: Awakenings');
 
     const chapBtn = container.querySelector('button[aria-label="Chapters"]') as HTMLButtonElement | null;
-    expect(chapBtn).toBeDefined();
-    expect(chapBtn?.textContent).toContain('2');
+    expect(chapBtn).not.toBeNull();
 
     await act(async () => {
       chapBtn?.click();

@@ -67,18 +67,27 @@ export const BookCard: React.FC<BookCardProps> = ({
 
   return (
     <button type="button" className="book-card group" onClick={() => onOpen(item)} aria-label={label}>
-      <div className="book-cover">
+      <div className="book-cover" data-media-type={item.mediaType}>
         {showCover ? (
-          <img
-            ref={imgRef}
-            src={src}
-            alt=""
-            data-loaded={loaded}
-            loading="lazy"
-            decoding="async"
-            onLoad={markLoaded}
-            onError={() => setFailed(true)}
-          />
+          <>
+            <img
+              src={src}
+              alt=""
+              aria-hidden="true"
+              className="cover-backdrop"
+            />
+            <img
+              ref={imgRef}
+              src={src}
+              alt=""
+              data-loaded={loaded}
+              loading="lazy"
+              decoding="async"
+              onLoad={markLoaded}
+              onError={() => setFailed(true)}
+              className="cover-image"
+            />
+          </>
         ) : (
           <div
             className="flex h-full w-full flex-col justify-between p-3"

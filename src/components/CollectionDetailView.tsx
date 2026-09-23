@@ -222,19 +222,29 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
                 <div key={work.orderIndex} className="book-card group relative">
                   <div
                     className="book-cover cursor-pointer"
+                    data-media-type={item.mediaType}
                     onClick={() => {
                       if (work.bookItem) onOpenItem(work.bookItem);
                       else onOpenItem(item);
                     }}
                   >
                     {url ? (
-                      <img
-                        src={url}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        className="h-full w-full object-cover"
-                      />
+                      <>
+                        <img
+                          src={url}
+                          alt=""
+                          aria-hidden="true"
+                          className="cover-backdrop"
+                        />
+                        <img
+                          src={url}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          className="cover-image"
+                          data-loaded="true"
+                        />
+                      </>
                     ) : (
                       <div className="flex h-full w-full flex-col items-center justify-center bg-[var(--surface-raised)] p-3 text-center">
                         <BookOpen className="h-8 w-8 text-[var(--text-tertiary)] opacity-40" />

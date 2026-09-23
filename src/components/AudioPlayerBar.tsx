@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   BookOpen,
   Bookmark,
+  ChevronLeft,
+  ChevronRight,
   Headphones,
   ListMusic,
   Maximize2,
@@ -11,8 +13,6 @@ import {
   Play,
   RotateCcw,
   RotateCw,
-  SkipBack,
-  SkipForward,
   Trash2,
   Volume1,
   Volume2,
@@ -562,14 +562,11 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         <button
           type="button"
           onClick={() => setIsChaptersOpen((open) => !open)}
-          className={`icon-button relative ${isChaptersOpen ? 'text-[var(--accent)] bg-[var(--surface-raised)]' : ''}`}
+          className={`icon-button ${isChaptersOpen ? 'text-[var(--accent)] bg-[var(--surface-raised)]' : ''}`}
           aria-label="Chapters"
           title="Chapters"
         >
           <ListMusic className="h-3.5 w-3.5" />
-          <span className="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[var(--accent)] px-1 text-[9px] font-bold text-[var(--text-inverse)]">
-            {chapters.length}
-          </span>
         </button>
 
         {isChaptersOpen && (
@@ -964,7 +961,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                   aria-label={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
                   title={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
                 >
-                  <SkipBack className="h-5 w-5" />
+                  <ChevronLeft className="h-6 w-6" />
                 </button>
 
                 <button
@@ -1009,7 +1006,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
                   aria-label={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
                   title={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
                 >
-                  <SkipForward className="h-5 w-5" />
+                  <ChevronRight className="h-6 w-6" />
                 </button>
               </div>
             </div>
@@ -1163,7 +1160,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
               aria-label={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
               title={chapters.length > 0 ? 'Previous chapter or track' : 'Previous track'}
             >
-              <SkipBack className="h-4 w-4" />
+              <ChevronLeft className="h-4 w-4" />
             </button>
 
             <button
@@ -1208,7 +1205,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
               aria-label={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
               title={chapters.length > 0 ? 'Next chapter or track' : 'Next track'}
             >
-              <SkipForward className="h-4 w-4" />
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
 
