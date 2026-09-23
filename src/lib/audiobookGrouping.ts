@@ -1,4 +1,4 @@
-import type { AudioChapter, AudioTrack, MediaItem, ProgressItem } from '../types';
+import type { AudioChapter, AudioTrack, LibraryState, MediaItem, ProgressItem } from '../types';
 import { cleanTitle, cleanTitleString } from './metadata';
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -33,6 +33,48 @@ export function hashString(str: string): string {
   h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(16, '0');
+}
+
+function normalizeIdentityPart(value: string | undefined | null): string {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** The last two segments of a directory path, e.g. "Author/Book" or "Book/CD1". */
+function trailingDirectory(dirPath: string): string {
+  return dirPath.split(/[\\/]+/).filter(Boolean).slice(-2).join('/');
+}
+
+/**
+ * Stable ID for a multi-file audiobook.
+ *
+ * Derived only from what identifies the *book* - its embedded album tag, or
+ * failing that the folder holding it - plus the author. It deliberately
+ * excludes the track list and the cleaned display title. Hashing the track IDs
+ * meant that adding, removing or retagging one file gave the book a new ID and
+ * orphaned its progress, bookmarks and collection memberships; hashing the
+ * cleaned title meant any change to the title heuristics re-identified every
+ * grouped audiobook at once.
+ *
+ * The raw album tag is used rather than the cleaned one for the same reason.
+ * Two folder segments are kept so per-disc folders like "CD1" stay distinct
+ * across different books without tying the ID to the full, movable path.
+ */
+export function computeAudiobookGroupId(parts: {
+  album?: string;
+  dirPath: string;
+  author?: string;
+}): string {
+  const author = normalizeIdentityPart(parts.author);
+  const album = normalizeIdentityPart(parts.album);
+  const identity = album
+    ? `audiobook:album:${album}|a:${author}`
+    : `audiobook:dir:${normalizeIdentityPart(trailingDirectory(parts.dirPath))}|a:${author}`;
+  return hashString(identity);
+}
+
+/** The pre-fix ID formula, kept only so existing references can be migrated. */
+function legacyAudiobookGroupId(bookTitle: string, author: string, trackIds: string[]): string {
+  return hashString(`audiobook:${bookTitle.toLowerCase()}|${author.toLowerCase()}|${trackIds.join(',')}`);
 }
 
 /**
@@ -118,7 +160,10 @@ export function resolveAudiobookProgress(
         id: item.id,
         currentTime: globalCurrentTime,
         duration: totalDuration,
-        percent: Math.min(1, Math.max(0, globalCurrentTime / totalDuration)),
+        // 0-100, the scale every other writer and reader of ProgressItem uses.
+        // Returning 0-1 here hid half-read books from the Continue shelf, which
+        // only shows items above 1 percent.
+        percent: Math.min(100, Math.max(0, (globalCurrentTime / totalDuration) * 100)),
         lastPlayed: bestProgress.lastPlayed,
       };
     }
@@ -314,9 +359,15 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
       }
     }
 
-    // Generate deterministic stable composite ID
-    const compositeId = hashString(
-      `audiobook:${bookTitle.toLowerCase()}|${commonAuthor.toLowerCase()}|${constituentTracks.map((t) => t.id).join(',')}`
+    const compositeId = computeAudiobookGroupId({
+      album: firstItem.album,
+      dirPath: getDirectory(firstItem.filePath),
+      author: commonAuthor,
+    });
+    const legacyId = legacyAudiobookGroupId(
+      bookTitle,
+      commonAuthor,
+      constituentTracks.map((t) => t.id)
     );
 
     const compositeBook: MediaItem = {
@@ -334,10 +385,134 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
       album: albumTitle,
       chapters,
       tracks: constituentTracks,
+      legacyIds: legacyId !== compositeId ? [legacyId] : undefined,
     };
 
     result.push(compositeBook);
   }
 
-  return result;
+  return assignUniqueGroupIds(result);
+}
+
+/**
+ * Bring previously persisted composites onto the stable scheme and make IDs
+ * unique within the library.
+ *
+ * Grouped books are persisted, and on load each arrives alone in its cluster
+ * and passes through untouched - so without this step a composite saved under
+ * the old scheme would keep its fragile ID until the next rescan re-identified
+ * it without warning.
+ *
+ * Two copies of the same book in different folders would otherwise share an ID;
+ * the second gets one salted with its directory, which is deterministic for a
+ * given library.
+ */
+function assignUniqueGroupIds(items: MediaItem[]): MediaItem[] {
+  const used = new Set<string>();
+
+  return items.map((item) => {
+    if (!item.tracks || item.tracks.length === 0) {
+      used.add(item.id);
+      return item;
+    }
+
+    const dirPath = getDirectory(item.filePath);
+    const baseId = computeAudiobookGroupId({ album: item.album, dirPath, author: item.author });
+    const id = used.has(baseId) ? hashString(`${baseId}|${dirPath.toLowerCase()}`) : baseId;
+    used.add(id);
+
+    if (id === item.id) return item;
+
+    // Only a genuinely old ID is recorded as legacy. When the base ID was taken
+    // by another copy, it belongs to that sibling - listing it here would let the
+    // migration move the sibling's progress onto this book.
+    const superseded = item.id === baseId ? [] : [item.id];
+    const legacyIds = Array.from(new Set([...(item.legacyIds ?? []), ...superseded])).filter(
+      (legacy) => legacy !== id
+    );
+    return { ...item, id, legacyIds: legacyIds.length > 0 ? legacyIds : undefined };
+  });
+}
+
+/**
+ * Move everything keyed by a superseded ID onto the item's current ID.
+ *
+ * Progress, bookmarks and collection members all reference items by ID, so when
+ * an item is re-identified (see `legacyIds`) they must follow it or they are
+ * silently orphaned. Where both IDs already hold data, nothing is discarded:
+ * the more recently played progress wins, and bookmarks and members are merged.
+ */
+export function migrateLegacyItemIds(state: LibraryState): { state: LibraryState; changed: boolean } {
+  const toCurrent = new Map<string, string>();
+  for (const item of state.items) {
+    for (const legacy of item.legacyIds ?? []) {
+      if (legacy !== item.id) toCurrent.set(legacy, item.id);
+    }
+  }
+  if (toCurrent.size === 0) return { state, changed: false };
+
+  let changed = false;
+
+  const progress = { ...state.progress };
+  for (const [legacy, current] of toCurrent) {
+    const old = progress[legacy];
+    if (!old) continue;
+    const existing = progress[current];
+    if (!existing || (old.lastPlayed ?? 0) > (existing.lastPlayed ?? 0)) {
+      progress[current] = { ...old, id: current };
+    }
+    delete progress[legacy];
+    changed = true;
+  }
+
+  const bookmarks = { ...state.bookmarks };
+  for (const [legacy, current] of toCurrent) {
+    const old = bookmarks[legacy];
+    if (!old) continue;
+    const merged = [...(bookmarks[current] ?? [])];
+    const seen = new Set(merged.map((b) => b.id));
+    for (const bookmark of old) {
+      if (!seen.has(bookmark.id)) merged.push({ ...bookmark, itemId: current });
+    }
+    bookmarks[current] = merged;
+    delete bookmarks[legacy];
+    changed = true;
+  }
+
+  const collections = (state.collections ?? []).map((collection) => {
+    if (!collection.memberIds.some((id) => toCurrent.has(id))) return collection;
+    changed = true;
+    const memberIds: string[] = [];
+    for (const id of collection.memberIds) {
+      const mapped = toCurrent.get(id) ?? id;
+      if (!memberIds.includes(mapped)) memberIds.push(mapped);
+    }
+    return { ...collection, memberIds, updatedAt: Date.now() };
+  });
+
+  return changed ? { state: { ...state, progress, bookmarks, collections }, changed } : { state, changed };
+}
+
+/**
+ * Carry `legacyIds` from the previous item list onto a freshly scanned one.
+ *
+ * A rescan rebuilds every composite from raw tracks, which would drop legacy
+ * IDs recorded on an earlier load. Keeping them means data still filed under
+ * an old ID can be migrated even if files changed in between.
+ */
+export function carryForwardLegacyIds(previous: MediaItem[], next: MediaItem[]): MediaItem[] {
+  const legacyById = new Map<string, string[]>();
+  for (const item of previous) {
+    if (item.legacyIds?.length) legacyById.set(item.id, item.legacyIds);
+  }
+  if (legacyById.size === 0) return next;
+
+  return next.map((item) => {
+    const carried = legacyById.get(item.id);
+    if (!carried) return item;
+    const legacyIds = Array.from(new Set([...(item.legacyIds ?? []), ...carried])).filter(
+      (legacy) => legacy !== item.id
+    );
+    return { ...item, legacyIds };
+  });
 }

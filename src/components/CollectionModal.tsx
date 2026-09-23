@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { BookMarked, ListOrdered, X } from 'lucide-react';
 import type { Collection, CollectionKind } from '../types';
 import { useDismissable } from '../hooks/useDismissable';
@@ -16,24 +16,16 @@ export const CollectionModal: React.FC<CollectionModalProps> = ({
   onClose,
   onSave,
 }) => {
-  const [name, setName] = useState('');
-  const [kind, setKind] = useState<CollectionKind>('series');
-  const [description, setDescription] = useState('');
+  /*
+   * Form state is seeded from props once, on mount. The parent gives this modal
+   * a key that changes on every open, so each open starts from the collection
+   * being edited (or blank). Copying props into state from an effect did the
+   * same job with an extra render per open.
+   */
+  const [name, setName] = useState(() => collection?.name ?? '');
+  const [kind, setKind] = useState<CollectionKind>(() => collection?.kind ?? 'series');
+  const [description, setDescription] = useState(() => collection?.description ?? '');
   const dialogRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (isOpen) {
-      if (collection) {
-        setName(collection.name);
-        setKind(collection.kind);
-        setDescription(collection.description || '');
-      } else {
-        setName('');
-        setKind('series');
-        setDescription('');
-      }
-    }
-  }, [isOpen, collection]);
 
   useDismissable(dialogRef, isOpen, onClose);
 

@@ -117,9 +117,28 @@ export async function getEdgeVoices(): Promise<EdgeVoice[]> {
   }
 }
 
-function escapeXml(text: string): string {
-  return text
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ')
+/**
+ * Replace the C0 control characters XML 1.0 forbids outright - everything below
+ * 0x20 except tab, newline and carriage return - with spaces.
+ *
+ * Book text does contain them (stray form feeds and NULs from PDF extraction),
+ * and a single one makes the SSML document malformed, so synthesis fails.
+ * Done by character code rather than a regex: a character-class regex over
+ * control characters trips ESLint's no-control-regex, whose job is catching
+ * accidental ones, and this is deliberate.
+ */
+function replaceXmlIllegalControlChars(text: string): string {
+  let out = '';
+  for (const ch of text) {
+    const code = ch.charCodeAt(0);
+    const forbidden = code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d;
+    out += forbidden ? ' ' : ch;
+  }
+  return out;
+}
+
+export function escapeXml(text: string): string {
+  return replaceXmlIllegalControlChars(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

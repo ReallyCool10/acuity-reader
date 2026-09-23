@@ -256,5 +256,24 @@ describe('Collections UI Components', () => {
         description: 'Original trilogy',
       });
     });
+
+    it('starts blank when creating a new collection', async () => {
+      const onSave = vi.fn();
+      const root = createRoot(container);
+      await act(async () => {
+        root.render(<CollectionModal isOpen={true} collection={null} onClose={vi.fn()} onSave={onSave} />);
+      });
+
+      const textInputs = Array.from(container.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input[type="text"], input:not([type]), textarea'));
+      expect(textInputs.length).toBeGreaterThan(0);
+      for (const input of textInputs) expect(input.value).toBe('');
+
+      // An empty name must not be saved.
+      const form = container.querySelector('form');
+      await act(async () => {
+        form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      });
+      expect(onSave).not.toHaveBeenCalled();
+    });
   });
 });

@@ -8,7 +8,11 @@ import {
   groupMultiFileAudiobooks,
   hashString,
   resolveAudiobookProgress,
+  migrateLegacyItemIds,
+  carryForwardLegacyIds,
+  computeAudiobookGroupId,
 } from './audiobookGrouping';
+import type { LibraryState } from '../types';
 
 describe('audiobookGrouping', () => {
   it('extracts filename and directory correctly across slash types', () => {
@@ -335,7 +339,167 @@ describe('audiobookGrouping', () => {
     // Global time: Track 2 offset (1000s) + local time (250s) = 1250s
     expect(resolved2?.currentTime).toBe(1250);
     expect(resolved2?.duration).toBe(3000);
-    expect(resolved2?.percent).toBeCloseTo(1250 / 3000);
+    // ProgressItem.percent is 0-100 everywhere else in the app.
+    expect(resolved2?.percent).toBeCloseTo((1250 / 3000) * 100);
     expect(resolved2?.lastPlayed).toBe(600);
+  });
+});
+
+/* ------------------------------------------------------------------------
+ * Regression tests: stable IDs for grouped audiobooks, and progress scale.
+ * ---------------------------------------------------------------------- */
+
+function track(n: number, overrides: Partial<MediaItem> = {}): MediaItem {
+  return {
+    id: `track-id-${n}`,
+    title: `Chapter ${n}`,
+    author: 'A. Author',
+    filePath: `C:/Books/The Long Book/${String(n).padStart(2, '0')} - The Long Book.mp3`,
+    mediaType: 'audio',
+    format: 'mp3',
+    fileSize: 1000 + n,
+    dateAdded: 1,
+    dirName: 'The Long Book',
+    durationSeconds: 600,
+    ...overrides,
+  };
+}
+
+const emptyState = (items: MediaItem[]): LibraryState => ({
+  folders: [],
+  items,
+  progress: {},
+  bookmarks: {},
+  collections: [],
+});
+
+describe('grouped audiobook IDs are stable', () => {
+  it('keeps the same ID when a track file is added', () => {
+    const three = groupMultiFileAudiobooks([track(1), track(2), track(3)]);
+    const four = groupMultiFileAudiobooks([track(1), track(2), track(3), track(4)]);
+    expect(four[0].id).toBe(three[0].id);
+  });
+
+  it('keeps the same ID when a track file is removed or retagged', () => {
+    const base = groupMultiFileAudiobooks([track(1), track(2), track(3)])[0].id;
+    const removed = groupMultiFileAudiobooks([track(1), track(2)])[0].id;
+    const retagged = groupMultiFileAudiobooks([
+      track(1, { id: 'retagged-1', title: 'Prologue' }),
+      track(2),
+      track(3),
+    ])[0].id;
+    expect(removed).toBe(base);
+    expect(retagged).toBe(base);
+  });
+
+  it('prefers the raw album tag, so it survives changes to title cleaning', () => {
+    const tagged = (n: number, name: string) =>
+      track(n, { album: 'The Long Book', filePath: `C:/Books/The Long Book/${name}` });
+    const a = groupMultiFileAudiobooks([tagged(1, '01.mp3'), tagged(2, '02.mp3')])[0].id;
+    const b = groupMultiFileAudiobooks([tagged(1, 'Part One.mp3'), tagged(2, 'Part Two.mp3')])[0].id;
+    expect(b).toBe(a);
+  });
+
+  it('distinguishes per-disc folders of different books by the same author', () => {
+    const cd = (book: string, n: number) =>
+      track(n, { id: `${book}-${n}`, dirName: 'CD1', filePath: `C:/Books/${book}/CD1/${String(n).padStart(2, '0')}.mp3` });
+    const first = groupMultiFileAudiobooks([cd('Book A', 1), cd('Book A', 2)])[0].id;
+    const second = groupMultiFileAudiobooks([cd('Book B', 1), cd('Book B', 2)])[0].id;
+    expect(second).not.toBe(first);
+  });
+
+  it('gives duplicate copies distinct IDs without naming the sibling as legacy', () => {
+    const copy = (root: string, n: number) =>
+      track(n, { id: `${root}-${n}`, album: 'Same Book', filePath: `C:/${root}/Same Book/${n}.mp3` });
+    const grouped = groupMultiFileAudiobooks([copy('Drive1', 1), copy('Drive1', 2), copy('Drive2', 1), copy('Drive2', 2)]);
+    expect(grouped).toHaveLength(2);
+    expect(grouped[0].id).not.toBe(grouped[1].id);
+    expect(grouped[1].legacyIds ?? []).not.toContain(grouped[0].id);
+  });
+
+  it('re-identifies a composite persisted under the old scheme and records its old ID', () => {
+    const fresh = groupMultiFileAudiobooks([track(1), track(2), track(3)])[0];
+    const persistedOld: MediaItem = { ...fresh, id: 'old-fragile-id', legacyIds: undefined };
+    const reloaded = groupMultiFileAudiobooks([persistedOld])[0];
+    expect(reloaded.id).toBe(fresh.id);
+    expect(reloaded.legacyIds).toContain('old-fragile-id');
+  });
+
+  it('matches computeAudiobookGroupId for a directory-clustered book', () => {
+    const grouped = groupMultiFileAudiobooks([track(1), track(2)])[0];
+    expect(grouped.id).toBe(
+      computeAudiobookGroupId({ dirPath: 'C:/Books/The Long Book', author: 'A. Author' })
+    );
+  });
+});
+
+describe('migrateLegacyItemIds', () => {
+  const book: MediaItem = { ...track(1), id: 'new-id', legacyIds: ['old-id'], tracks: [] };
+
+  it('moves progress, bookmarks and collection members to the current ID', () => {
+    const state: LibraryState = {
+      ...emptyState([book]),
+      progress: { 'old-id': { id: 'old-id', currentTime: 42, percent: 30, lastPlayed: 5 } },
+      bookmarks: { 'old-id': [{ id: 'b1', itemId: 'old-id', label: 'x', createdAt: 1, position: 42 }] },
+      collections: [
+        { id: 'c1', name: 'Series', kind: 'series', memberIds: ['other', 'old-id'], createdAt: 1, updatedAt: 1 },
+      ],
+    };
+
+    const { state: out, changed } = migrateLegacyItemIds(state);
+    expect(changed).toBe(true);
+    expect(out.progress['old-id']).toBeUndefined();
+    expect(out.progress['new-id']).toMatchObject({ id: 'new-id', currentTime: 42 });
+    expect(out.bookmarks['old-id']).toBeUndefined();
+    expect(out.bookmarks['new-id']).toEqual([expect.objectContaining({ id: 'b1', itemId: 'new-id' })]);
+    // Order is preserved - it matters for series.
+    expect(out.collections[0].memberIds).toEqual(['other', 'new-id']);
+  });
+
+  it('keeps the more recently played progress when both IDs hold some', () => {
+    const state: LibraryState = {
+      ...emptyState([book]),
+      progress: {
+        'old-id': { id: 'old-id', currentTime: 10, percent: 5, lastPlayed: 1 },
+        'new-id': { id: 'new-id', currentTime: 99, percent: 60, lastPlayed: 9 },
+      },
+    };
+    expect(migrateLegacyItemIds(state).state.progress['new-id'].currentTime).toBe(99);
+  });
+
+  it('does not duplicate a member already present under the current ID', () => {
+    const state: LibraryState = {
+      ...emptyState([book]),
+      collections: [
+        { id: 'c1', name: 'T', kind: 'theme', memberIds: ['new-id', 'old-id'], createdAt: 1, updatedAt: 1 },
+      ],
+    };
+    expect(migrateLegacyItemIds(state).state.collections[0].memberIds).toEqual(['new-id']);
+  });
+
+  it('reports no change and returns the same object when nothing is legacy', () => {
+    const state = emptyState([track(1)]);
+    const result = migrateLegacyItemIds(state);
+    expect(result.changed).toBe(false);
+    expect(result.state).toBe(state);
+  });
+});
+
+describe('carryForwardLegacyIds', () => {
+  it('keeps legacy IDs recorded on the previous item across a rescan', () => {
+    const previous: MediaItem[] = [{ ...track(1), id: 'book', legacyIds: ['older'] }];
+    const next: MediaItem[] = [{ ...track(1), id: 'book', legacyIds: ['formula-id'] }];
+    expect(carryForwardLegacyIds(previous, next)[0].legacyIds?.sort()).toEqual(['formula-id', 'older']);
+  });
+});
+
+describe('resolveAudiobookProgress percent scale', () => {
+  it('reports translated track progress on the 0-100 scale', () => {
+    const book = groupMultiFileAudiobooks([track(1), track(2), track(3)])[0];
+    // Half of track 2 played: 900s of 1800s, so 50% through the book.
+    const progress: Record<string, ProgressItem> = {
+      'track-id-2': { id: 'track-id-2', currentTime: 300, duration: 600, percent: 50, lastPlayed: 5 },
+    };
+    expect(resolveAudiobookProgress(book, progress)?.percent).toBeCloseTo(50, 5);
   });
 });

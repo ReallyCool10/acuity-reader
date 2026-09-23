@@ -43,6 +43,11 @@ export interface MediaItem {
   chapters?: AudioChapter[];
   /** For multi-file audiobooks, constituent audio tracks in chronological order */
   tracks?: AudioTrack[];
+  /**
+   * IDs this item was previously known by. Progress, bookmarks and collection
+   * members still keyed by one of these are moved to `id` on load.
+   */
+  legacyIds?: string[];
 }
 
 export interface ProgressItem {
