@@ -25,6 +25,7 @@ import {
   getUnresolvedMemberCount,
   type SeriesSuggestion,
 } from './lib/collections';
+import { groupMultiFileAudiobooks, resolveAudiobookProgress } from './lib/audiobookGrouping';
 import type { AppTheme, Bookmark, Collection, CollectionKind, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
 const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
@@ -145,8 +146,9 @@ export default function App() {
         }
 
         const deduped = Array.from(new Map(scanned.map((item) => [item.filePath, item])).values());
+        const grouped = groupMultiFileAudiobooks(deduped);
 
-        updateLibrary((prev) => ({ ...prev, folders: foldersToScan, items: deduped }));
+        updateLibrary((prev) => ({ ...prev, folders: foldersToScan, items: grouped }));
       } catch (err) {
         console.error('Library scan failed:', err);
       } finally {
@@ -162,7 +164,8 @@ export default function App() {
       const saved = await window.electronAPI?.loadLibrary();
       if (!saved || !Array.isArray(saved.items)) return;
 
-      setLibrary({ ...EMPTY_LIBRARY, ...saved });
+      const grouped = groupMultiFileAudiobooks(saved.items);
+      setLibrary({ ...EMPTY_LIBRARY, ...saved, items: grouped });
 
       // Initial scan if folders are configured but library items are empty.
       if (saved.folders?.length && saved.items.length === 0) {
@@ -391,8 +394,8 @@ export default function App() {
         case 'recent':
         default: {
           // Unplayed titles sort after everything that has been opened.
-          const aPlayed = library.progress[a.id]?.lastPlayed ?? 0;
-          const bPlayed = library.progress[b.id]?.lastPlayed ?? 0;
+          const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
+          const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
           if (aPlayed !== bPlayed) return bPlayed - aPlayed;
           return collator.compare(a.title, b.title);
         }
@@ -405,17 +408,18 @@ export default function App() {
 
     return library.items
       .filter((item) => {
-        const progress = library.progress[item.id];
+        const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
         return (
           progress &&
           progress.percent > CONTINUE_MIN_PERCENT &&
           progress.percent < CONTINUE_MAX_PERCENT
         );
       })
-      .sort(
-        (a, b) =>
-          (library.progress[b.id]?.lastPlayed ?? 0) - (library.progress[a.id]?.lastPlayed ?? 0)
-      )
+      .sort((a, b) => {
+        const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
+        const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
+        return bPlayed - aPlayed;
+      })
       .slice(0, CONTINUE_LIMIT);
   }, [library.items, library.progress, searchQuery, activeFilter]);
 
@@ -725,7 +729,7 @@ export default function App() {
                       <BookCard
                         key={item.id}
                         item={item}
-                        progress={library.progress[item.id]}
+                        progress={resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id]}
                         isPlaying={activeAudioItem?.id === item.id}
                         onOpen={openItem}
                         onAddToCollection={(it) => setAddToCollectionItem(it)}
@@ -745,7 +749,7 @@ export default function App() {
           item={activeAudioItem}
           isFullScreen={isAudioFullScreen}
           onFullScreenChange={setIsAudioFullScreen}
-          initialTime={library.progress[activeAudioItem.id]?.currentTime ?? 0}
+          initialTime={(resolveAudiobookProgress(activeAudioItem, library.progress) ?? library.progress[activeAudioItem.id])?.currentTime ?? 0}
           bookmarks={library.bookmarks[activeAudioItem.id] ?? []}
           onClose={() => {
             setIsAudioFullScreen(false);

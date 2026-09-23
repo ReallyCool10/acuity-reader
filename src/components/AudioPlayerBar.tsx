@@ -27,6 +27,7 @@ import { usePersistentState } from '../hooks/usePersistentState';
 import { useDismissable } from '../hooks/useDismissable';
 import { Scrubber } from './Scrubber';
 import { themeForTitle } from './BookCard';
+import { getTrackForTime } from '../lib/audiobookGrouping';
 
 export interface AudioPlayerBarProps {
   item: MediaItem;
@@ -159,7 +160,34 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     setIsSleepOpen(false);
   }, []);
 
-  const src = useMemo(() => mediaUrl(item.filePath), [item.filePath]);
+  const hasMultipleTracks = Boolean(item.tracks && item.tracks.length > 1);
+  const tracks = useMemo(() => item.tracks ?? [], [item.tracks]);
+
+  // Determine starting track and local position
+  const initialTrackInfo = useMemo(() => {
+    if (hasMultipleTracks && tracks.length > 0) {
+      return getTrackForTime(tracks, initialTime);
+    }
+    return { track: null, trackIndex: 0, localTime: initialTime };
+  }, [hasMultipleTracks, tracks, initialTime]);
+
+  const [currentTrackIndex, setCurrentTrackIndex] = useState(initialTrackInfo.trackIndex);
+  const pendingLocalSeek = useRef<number | null>(null);
+
+  const activeTrack = hasMultipleTracks ? tracks[currentTrackIndex] || tracks[0] : null;
+  const activeFilePath = activeTrack ? activeTrack.filePath : item.filePath;
+  const src = useMemo(() => mediaUrl(activeFilePath), [activeFilePath]);
+
+  const totalBookDuration = useMemo(() => {
+    if (item.durationSeconds && item.durationSeconds > 0) {
+      return item.durationSeconds;
+    }
+    if (hasMultipleTracks) {
+      return tracks.reduce((sum, t) => sum + (t.durationSeconds || 0), 0);
+    }
+    return 0;
+  }, [item.durationSeconds, hasMultipleTracks, tracks]);
+
   const cover = coverUrl(item);
   const displayTitle = useMemo(() => cleanTitleString(item.title) || item.title, [item.title]);
   const jacketTheme = useMemo(() => themeForTitle(displayTitle), [displayTitle]);
@@ -171,19 +199,37 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     else audio.pause();
   }, []);
 
-  const skip = useCallback((seconds: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    const limit = audio.duration || 0;
-    audio.currentTime = Math.max(0, Math.min(limit, audio.currentTime + seconds));
-  }, []);
+  const seekTo = useCallback(
+    (globalSeconds: number) => {
+      const audio = audioRef.current;
+      if (!audio) return;
 
-  const seekTo = useCallback((seconds: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = seconds;
-    setCurrentTime(seconds);
-  }, []);
+      if (!hasMultipleTracks) {
+        audio.currentTime = globalSeconds;
+        setCurrentTime(globalSeconds);
+        return;
+      }
+
+      const target = getTrackForTime(tracks, globalSeconds);
+      if (target.trackIndex !== currentTrackIndex) {
+        pendingLocalSeek.current = target.localTime;
+        setCurrentTrackIndex(target.trackIndex);
+      } else {
+        audio.currentTime = target.localTime;
+      }
+      setCurrentTime(globalSeconds);
+    },
+    [hasMultipleTracks, tracks, currentTrackIndex]
+  );
+
+  const skip = useCallback(
+    (seconds: number) => {
+      const limit = totalBookDuration || (audioRef.current?.duration || 0);
+      const target = Math.max(0, Math.min(limit, currentTime + seconds));
+      seekTo(target);
+    },
+    [totalBookDuration, currentTime, seekTo]
+  );
 
   /* Apply persisted preferences to the element whenever they change. */
   useEffect(() => {
@@ -224,9 +270,10 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     return chapters[0];
   }, [chapters, currentTime]);
 
-  const canGoPrev = hasPrevTrack || chapters.length > 0 || currentTime > 3;
+  const canGoPrev = hasPrevTrack || (hasMultipleTracks && currentTrackIndex > 0) || chapters.length > 0 || currentTime > 3;
   const canGoNext =
     hasNextTrack ||
+    (hasMultipleTracks && currentTrackIndex < tracks.length - 1) ||
     (chapters.length > 0 &&
       Boolean(activeChapter && chapters.findIndex((c) => c.id === activeChapter.id) < chapters.length - 1));
 
@@ -243,12 +290,17 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       }
     }
 
+    if (hasMultipleTracks && currentTrackIndex > 0) {
+      seekTo(tracks[currentTrackIndex - 1].offsetSeconds);
+      return;
+    }
+
     if (onPrevTrack && hasPrevTrack) {
       onPrevTrack();
     } else {
       seekTo(0);
     }
-  }, [chapters, activeChapter, currentTime, seekTo, onPrevTrack, hasPrevTrack]);
+  }, [chapters, activeChapter, currentTime, seekTo, hasMultipleTracks, currentTrackIndex, tracks, onPrevTrack, hasPrevTrack]);
 
   const handleNext = useCallback(() => {
     if (chapters.length > 0) {
@@ -259,10 +311,15 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       }
     }
 
+    if (hasMultipleTracks && currentTrackIndex < tracks.length - 1) {
+      seekTo(tracks[currentTrackIndex + 1].offsetSeconds);
+      return;
+    }
+
     if (onNextTrack && hasNextTrack) {
       onNextTrack();
     }
-  }, [chapters, activeChapter, seekTo, onNextTrack, hasNextTrack]);
+  }, [chapters, activeChapter, seekTo, hasMultipleTracks, currentTrackIndex, tracks, onNextTrack, hasNextTrack]);
 
   /* Taskbar thumbnail buttons and the tray menu drive the same transport. */
   useEffect(() => {
@@ -370,12 +427,26 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     const audio = audioRef.current;
     if (!audio) return;
 
-    setDuration(audio.duration || item.durationSeconds || 0);
+    if (hasMultipleTracks) {
+      setDuration(totalBookDuration || audio.duration || 0);
+    } else {
+      setDuration(audio.duration || item.durationSeconds || 0);
+    }
     audio.playbackRate = playbackRate;
     audio.volume = volume;
     audio.muted = isMuted;
 
-    if (initialTime > 0 && initialTime < audio.duration) audio.currentTime = initialTime;
+    if (pendingLocalSeek.current !== null) {
+      audio.currentTime = pendingLocalSeek.current;
+      pendingLocalSeek.current = null;
+    } else if (hasMultipleTracks) {
+      if (initialTime > 0 && currentTrackIndex === initialTrackInfo.trackIndex) {
+        audio.currentTime = initialTrackInfo.localTime;
+      }
+    } else if (initialTime > 0 && initialTime < audio.duration) {
+      audio.currentTime = initialTime;
+    }
+
     void audio.play().catch(() => {
       // Autoplay refusal is not an error worth surfacing; the user can press play.
     });
@@ -384,8 +455,12 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   const handleTimeUpdate = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    setCurrentTime(audio.currentTime);
-    onProgressUpdate(item.id, audio.currentTime, audio.duration || 0);
+    const localTime = audio.currentTime;
+    const globalTime = hasMultipleTracks && activeTrack
+      ? activeTrack.offsetSeconds + localTime
+      : localTime;
+    setCurrentTime(globalTime);
+    onProgressUpdate(item.id, globalTime, totalBookDuration || audio.duration || 0);
   };
 
   const displayTime = previewTime ?? currentTime;
@@ -698,14 +773,24 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
         src={src}
         preload="metadata"
         onLoadedMetadata={handleLoadedMetadata}
-        onDurationChange={() => setDuration(audioRef.current?.duration || 0)}
+        onDurationChange={() => {
+          if (!hasMultipleTracks) {
+            setDuration(audioRef.current?.duration || 0);
+          }
+        }}
         onTimeUpdate={handleTimeUpdate}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={() => {
-          setIsPlaying(false);
-          if (onNextTrack && hasNextTrack) {
-            onNextTrack();
+          if (hasMultipleTracks && currentTrackIndex < tracks.length - 1) {
+            const nextIndex = currentTrackIndex + 1;
+            pendingLocalSeek.current = 0;
+            setCurrentTrackIndex(nextIndex);
+          } else {
+            setIsPlaying(false);
+            if (onNextTrack && hasNextTrack) {
+              onNextTrack();
+            }
           }
         }}
         onError={() => setError('This file could not be played.')}

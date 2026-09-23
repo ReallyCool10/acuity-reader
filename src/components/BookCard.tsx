@@ -129,14 +129,21 @@ export const BookCard: React.FC<BookCardProps> = ({
           </div>
         )}
 
-        {item.companionPath && (
+        {item.companionPath ? (
           <span
             className="absolute right-2 top-2 z-[3] rounded-[4px] border border-white/15 bg-black/65 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/90 backdrop-blur-md"
             title="Both a text and an audio edition are in your library"
           >
             Dual
           </span>
-        )}
+        ) : item.tracks && item.tracks.length > 1 ? (
+          <span
+            className="absolute right-2 top-2 z-[3] rounded-[4px] border border-white/15 bg-black/65 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/90 backdrop-blur-md"
+            title={`${item.tracks.length} tracks consolidated into one audiobook`}
+          >
+            {item.tracks.length} parts
+          </span>
+        ) : null}
 
         {onAddToCollection && (
           <button

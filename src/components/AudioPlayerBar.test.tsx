@@ -462,5 +462,97 @@ describe('AudioPlayerBar', () => {
       root.unmount();
     });
   });
+
+  it('supports multi-track audiobooks: calculates duration, initial track seek, and auto-advancement', async () => {
+    const multiTrackItem: MediaItem = {
+      id: 'multi-part-1',
+      title: 'The Hobbit',
+      author: 'J.R.R. Tolkien',
+      filePath: 'C:/Audiobooks/The Hobbit/01 - An Unexpected Party.mp3',
+      mediaType: 'audio',
+      format: 'mp3',
+      fileSize: 50000000,
+      dateAdded: Date.now(),
+      dirName: 'The Hobbit',
+      durationSeconds: 1800,
+      tracks: [
+        {
+          id: 'track-1',
+          title: '01 - An Unexpected Party',
+          filePath: 'C:/Audiobooks/The Hobbit/01 - An Unexpected Party.mp3',
+          durationSeconds: 1000,
+          offsetSeconds: 0,
+        },
+        {
+          id: 'track-2',
+          title: '02 - Roast Mutton',
+          filePath: 'C:/Audiobooks/The Hobbit/02 - Roast Mutton.mp3',
+          durationSeconds: 800,
+          offsetSeconds: 1000,
+        },
+      ],
+      chapters: [
+        { id: 'chap-1', title: '01 - An Unexpected Party', startTime: 0, endTime: 1000 },
+        { id: 'chap-2', title: '02 - Roast Mutton', startTime: 1000, endTime: 1800 },
+      ],
+    };
+
+    const root = createRoot(container);
+
+    // 1. Initial render at time 1200 (should resolve to Track 2!)
+    await act(async () => {
+      root.render(
+        <AudioPlayerBar
+          item={multiTrackItem}
+          initialTime={1200}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const audio = container.querySelector('audio') as HTMLAudioElement;
+    expect(audio).toBeDefined();
+    // Audio src should point to track 2
+    expect(decodeURIComponent(audio.src)).toContain('02 - Roast Mutton.mp3');
+
+    // 2. Fire onEnded -> should stay at track 2 since it's the last track
+    await act(async () => {
+      audio.dispatchEvent(new Event('ended'));
+    });
+
+    await act(async () => {
+      root.unmount();
+    });
+
+    // 3. Render at start (time 0) -> should point to Track 1, and onEnded advances to Track 2
+    const root2 = createRoot(container);
+    await act(async () => {
+      root2.render(
+        <AudioPlayerBar
+          item={multiTrackItem}
+          initialTime={0}
+          onClose={vi.fn()}
+          onProgressUpdate={vi.fn()}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    const audio2 = container.querySelector('audio') as HTMLAudioElement;
+    expect(decodeURIComponent(audio2.src)).toContain('01 - An Unexpected Party.mp3');
+
+    // Fire onEnded on track 1 -> advances to track 2
+    await act(async () => {
+      audio2.dispatchEvent(new Event('ended'));
+    });
+
+    expect(decodeURIComponent(audio2.src)).toContain('02 - Roast Mutton.mp3');
+
+    await act(async () => {
+      root2.unmount();
+    });
+  });
 });
 

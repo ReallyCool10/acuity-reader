@@ -21,6 +21,7 @@ import {
   type CollectionWorkItem,
 } from '../lib/collections';
 import { coverUrl } from '../lib/media';
+import { resolveAudiobookProgress } from '../lib/audiobookGrouping';
 import { CollectionMemberPickerModal } from './CollectionMemberPickerModal';
 
 interface CollectionDetailViewProps {
@@ -210,7 +211,8 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
             {resolvedWorks.map((work, index) => {
               const item = work.primaryItem;
               const url = coverUrl(item);
-              const itemProgress = progress[item.id]?.percent ?? 0;
+              const itemProgress =
+                (resolveAudiobookProgress(item, progress) ?? progress[item.id])?.percent ?? 0;
               const isPlaying =
                 Boolean(activeAudioId) &&
                 (activeAudioId === item.id ||

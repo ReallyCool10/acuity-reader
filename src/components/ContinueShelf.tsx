@@ -1,6 +1,7 @@
 import React from 'react';
 import type { MediaItem, ProgressItem } from '../types';
 import { BookCard } from './BookCard';
+import { resolveAudiobookProgress } from '../lib/audiobookGrouping';
 
 interface ContinueShelfProps {
   items: MediaItem[];
@@ -36,7 +37,7 @@ export const ContinueShelf: React.FC<ContinueShelfProps> = ({
           <BookCard
             key={item.id}
             item={item}
-            progress={progress[item.id]}
+            progress={resolveAudiobookProgress(item, progress) ?? progress[item.id]}
             isPlaying={activeAudioId === item.id}
             onOpen={onOpen}
           />

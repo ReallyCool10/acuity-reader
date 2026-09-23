@@ -10,6 +10,17 @@ export interface AudioChapter {
   endTime?: number;
 }
 
+export interface AudioTrack {
+  id: string;
+  title: string;
+  filePath: string;
+  durationSeconds: number;
+  offsetSeconds: number;
+  trackNumber?: number;
+  discNumber?: number;
+  chapters?: AudioChapter[];
+}
+
 export interface MediaItem {
   id: string;
   title: string;
@@ -30,6 +41,8 @@ export interface MediaItem {
   discNumber?: number;
   album?: string;
   chapters?: AudioChapter[];
+  /** For multi-file audiobooks, constituent audio tracks in chronological order */
+  tracks?: AudioTrack[];
 }
 
 export interface ProgressItem {
