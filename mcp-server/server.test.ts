@@ -47,6 +47,7 @@ describe('mcp-server/server', () => {
           },
         ],
       },
+      collections: [],
     };
     await saveLibraryState(sampleState, tempFilePath);
   });

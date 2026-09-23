@@ -6,18 +6,19 @@ import { useDismissable } from '../hooks/useDismissable';
 interface LibraryToolbarProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
-  activeFilter: 'all' | MediaType;
-  onFilterChange: (filter: 'all' | MediaType) => void;
+  activeFilter: 'all' | MediaType | 'collections';
+  onFilterChange: (filter: 'all' | MediaType | 'collections') => void;
   sortKey: SortKey;
   onSortChange: (key: SortKey) => void;
-  counts: { all: number; books: number; audio: number };
+  counts: { all: number; books: number; audio: number; collections: number };
   searchRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-const FILTERS: { key: 'all' | MediaType; label: string; countKey: keyof LibraryToolbarProps['counts'] }[] = [
+const FILTERS: { key: 'all' | MediaType | 'collections'; label: string; countKey: keyof LibraryToolbarProps['counts'] }[] = [
   { key: 'all', label: 'All', countKey: 'all' },
   { key: 'book', label: 'Books', countKey: 'books' },
   { key: 'audio', label: 'Audio', countKey: 'audio' },
+  { key: 'collections', label: 'Collections', countKey: 'collections' },
 ];
 
 const SORTS: { key: SortKey; label: string }[] = [

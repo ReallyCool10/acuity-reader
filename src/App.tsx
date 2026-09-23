@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, FolderPlus, SearchX } from 'lucide-react';
+import { BookOpen, FolderPlus, Layers, Plus, SearchX } from 'lucide-react';
 import { TitleBarControls } from './components/TitleBarControls';
 import { LibraryToolbar } from './components/LibraryToolbar';
 import { ContinueShelf } from './components/ContinueShelf';
@@ -8,11 +8,26 @@ import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { ReaderView } from './components/ReaderView';
 import { SettingsModal } from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { CollectionCard } from './components/CollectionCard';
+import { CollectionDetailView } from './components/CollectionDetailView';
+import { CollectionModal } from './components/CollectionModal';
+import { AddToCollectionModal } from './components/AddToCollectionModal';
+import { SuggestedSeriesBanner } from './components/SuggestedSeriesBanner';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import { findSiblingTracks } from './lib/playlist';
-import type { AppTheme, Bookmark, LibraryState, MediaItem, MediaType, SortKey } from './types';
+import {
+  createCollection,
+  updateCollection,
+  addMemberToCollection,
+  removeMemberFromCollection,
+  detectSeriesSuggestions,
+  resolveCollectionMembers,
+  getUnresolvedMemberCount,
+  type SeriesSuggestion,
+} from './lib/collections';
+import type { AppTheme, Bookmark, Collection, CollectionKind, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
-const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {} };
+const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
 
 /** Titles at least this far in — but not finished — qualify for the Continue shelf. */
 const CONTINUE_MIN_PERCENT = 1;
@@ -22,7 +37,12 @@ const CONTINUE_LIMIT = 12;
 export default function App() {
   const [library, setLibrary] = useState<LibraryState>(EMPTY_LIBRARY);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | MediaType>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | MediaType | 'collections'>('all');
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+  const [isCollectionModalOpen, setIsCollectionModalOpen] = useState(false);
+  const [editingCollection, setEditingCollection] = useState<Collection | null>(null);
+  const [addToCollectionItem, setAddToCollectionItem] = useState<MediaItem | null>(null);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = usePersistentState<SortKey>('acuity.sortKey', 'recent');
   const [appTheme, setAppTheme] = usePersistentState<AppTheme>('acuity.app.theme', 'system');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -143,8 +163,8 @@ export default function App() {
 
       setLibrary({ ...EMPTY_LIBRARY, ...saved });
 
-      // Refresh in the background when covers are missing from a previous scan.
-      if (saved.folders?.length && saved.items.some((item) => !item.coverUrl)) {
+      // Initial scan if folders are configured but library items are empty.
+      if (saved.folders?.length && saved.items.length === 0) {
         void scanFolders(saved.folders);
       }
     }
@@ -222,6 +242,33 @@ export default function App() {
     [updateLibrary]
   );
 
+  const handleMetadataUpdate = useCallback(
+    (itemId: string, meta: { title?: string; author?: string }) => {
+      if (!meta.title) return;
+      updateLibrary((prev) => {
+        let changed = false;
+        const items = prev.items.map((it) => {
+          if (it.id === itemId) {
+            const nextTitle = meta.title || it.title;
+            const nextAuthor = meta.author || it.author;
+            if (nextTitle !== it.title || nextAuthor !== it.author) {
+              changed = true;
+              return { ...it, title: nextTitle, author: nextAuthor };
+            }
+          }
+          return it;
+        });
+        if (!changed) return prev;
+        return { ...prev, items };
+      });
+      setActiveBookItem((prev) => {
+        if (!prev || prev.id !== itemId) return prev;
+        return { ...prev, title: meta.title || prev.title, author: meta.author || prev.author };
+      });
+    },
+    [updateLibrary]
+  );
+
   const addBookmark = useCallback(
     (itemId: string, position: number, label: string, excerpt?: string) => {
       const bookmark: Bookmark = {
@@ -290,11 +337,30 @@ export default function App() {
       all: library.items.length,
       books: library.items.filter((item) => item.mediaType === 'book').length,
       audio: library.items.filter((item) => item.mediaType === 'audio').length,
+      collections: (library.collections || []).length,
     }),
-    [library.items]
+    [library.items, library.collections]
   );
 
+  const visibleCollections = useMemo(() => {
+    const cols = library.collections || [];
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return cols;
+    return cols.filter(
+      (c) =>
+        c.name.toLowerCase().includes(query) ||
+        (c.description && c.description.toLowerCase().includes(query))
+    );
+  }, [library.collections, searchQuery]);
+
+  const suggestedSeries = useMemo(() => {
+    return detectSeriesSuggestions(library.items, library.collections || []).filter(
+      (s) => !dismissedSuggestions.has(s.name)
+    );
+  }, [library.items, library.collections, dismissedSuggestions]);
+
   const visibleItems = useMemo(() => {
+    if (activeFilter === 'collections') return [];
     const query = searchQuery.trim().toLowerCase();
 
     const filtered = library.items.filter((item) => {
@@ -348,6 +414,93 @@ export default function App() {
       .slice(0, CONTINUE_LIMIT);
   }, [library.items, library.progress, searchQuery, activeFilter]);
 
+  /* -------------------------------------------------------- collections */
+
+  const handleCreateOrUpdateCollection = useCallback(
+    (data: { name: string; kind: CollectionKind; description?: string }) => {
+      if (editingCollection) {
+        updateLibrary((prev) => ({
+          ...prev,
+          collections: (prev.collections || []).map((c) =>
+            c.id === editingCollection.id ? updateCollection(c, data) : c
+          ),
+        }));
+      } else {
+        const newCol = createCollection(data.name, data.kind, [], data.description);
+        updateLibrary((prev) => ({
+          ...prev,
+          collections: [...(prev.collections || []), newCol],
+        }));
+      }
+      setIsCollectionModalOpen(false);
+      setEditingCollection(null);
+    },
+    [editingCollection, updateLibrary]
+  );
+
+  const handleDeleteCollection = useCallback(
+    (collectionId: string) => {
+      updateLibrary((prev) => ({
+        ...prev,
+        collections: (prev.collections || []).filter((c) => c.id !== collectionId),
+      }));
+      if (activeCollectionId === collectionId) {
+        setActiveCollectionId(null);
+      }
+    },
+    [activeCollectionId, updateLibrary]
+  );
+
+  const handleUpdateCollection = useCallback(
+    (updated: Collection) => {
+      updateLibrary((prev) => ({
+        ...prev,
+        collections: (prev.collections || []).map((c) => (c.id === updated.id ? updated : c)),
+      }));
+    },
+    [updateLibrary]
+  );
+
+  const handleToggleItemCollection = useCallback(
+    (collectionId: string, shouldInclude: boolean) => {
+      if (!addToCollectionItem) return;
+      const itemId = addToCollectionItem.id;
+      updateLibrary((prev) => {
+        const cols = (prev.collections || []).map((c) => {
+          if (c.id !== collectionId) return c;
+          if (shouldInclude) {
+            return addMemberToCollection(c, itemId);
+          } else {
+            return removeMemberFromCollection(c, itemId);
+          }
+        });
+        return { ...prev, collections: cols };
+      });
+    },
+    [addToCollectionItem, updateLibrary]
+  );
+
+  const handleAcceptSuggestedSeries = useCallback(
+    (suggestion: SeriesSuggestion) => {
+      const newCol = createCollection(
+        suggestion.name,
+        'series',
+        suggestion.memberIds,
+        `Series auto-detected from ${suggestion.name}`
+      );
+      updateLibrary((prev) => ({
+        ...prev,
+        collections: [...(prev.collections || []), newCol],
+      }));
+      setDismissedSuggestions((prev) => new Set([...prev, suggestion.name]));
+    },
+    [updateLibrary]
+  );
+
+  const handleDismissSuggestedSeries = useCallback((name: string) => {
+    setDismissedSuggestions((prev) => new Set([...prev, name]));
+  }, []);
+
   /* --------------------------------------------------------- shortcuts */
 
   useEffect(() => {
@@ -369,6 +522,19 @@ export default function App() {
       }
 
       if (event.key === 'Escape') {
+        if (activeCollectionId) {
+          setActiveCollectionId(null);
+          return;
+        }
+        if (isCollectionModalOpen) {
+          setIsCollectionModalOpen(false);
+          setEditingCollection(null);
+          return;
+        }
+        if (addToCollectionItem) {
+          setAddToCollectionItem(null);
+          return;
+        }
         if (isSettingsOpen) {
           setIsSettingsOpen(false);
           return;
@@ -389,9 +555,17 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeAudioItem, activeBookItem, isSettingsOpen]);
+  }, [
+    activeAudioItem,
+    activeBookItem,
+    isSettingsOpen,
+    activeCollectionId,
+    isCollectionModalOpen,
+    addToCollectionItem,
+  ]);
 
   const hasLibrary = library.items.length > 0;
+  const activeCollection = (library.collections || []).find((c) => c.id === activeCollectionId);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-[var(--surface-base)] backdrop-blur-3xl">
@@ -407,7 +581,10 @@ export default function App() {
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           activeFilter={activeFilter}
-          onFilterChange={setActiveFilter}
+          onFilterChange={(filter) => {
+            setActiveFilter(filter);
+            setActiveCollectionId(null);
+          }}
           sortKey={sortKey}
           onSortChange={setSortKey}
           counts={counts}
@@ -415,56 +592,142 @@ export default function App() {
         />
       )}
 
-      <main className="flex-1 overflow-y-auto px-4 pb-6" style={{ scrollbarGutter: 'stable' }}>
-        {!hasLibrary && !isScanning && (
-          <EmptyState
-            icon={<BookOpen className="h-6 w-6" />}
-            title="Welcome to Acuity Reader"
-            body="Point Acuity at the folder holding your books and audiobooks. Covers and metadata are read automatically."
-            action={{ label: 'Choose a folder', onClick: () => void handleAddFolder() }}
+      {activeCollection ? (
+        <main className="flex-1 overflow-hidden">
+          <CollectionDetailView
+            collection={activeCollection}
+            libraryItems={library.items}
+            progress={library.progress}
+            activeAudioId={activeAudioItem?.id}
+            onBack={() => setActiveCollectionId(null)}
+            onOpenItem={openItem}
+            onEditCollection={(col) => {
+              setEditingCollection(col);
+              setIsCollectionModalOpen(true);
+            }}
+            onDeleteCollection={handleDeleteCollection}
+            onUpdateCollection={handleUpdateCollection}
           />
-        )}
-
-        {!hasLibrary && isScanning && <LibrarySkeleton />}
-
-        {hasLibrary && (
-          <>
-            <ContinueShelf
-              items={continueItems}
-              progress={library.progress}
-              activeAudioId={activeAudioItem?.id}
-              onOpen={openItem}
+        </main>
+      ) : (
+        <main className="flex-1 overflow-y-auto px-4 pb-6" style={{ scrollbarGutter: 'stable' }}>
+          {!hasLibrary && !isScanning && (
+            <EmptyState
+              icon={<BookOpen className="h-6 w-6" />}
+              title="Welcome to Acuity Reader"
+              body="Point Acuity at the folder holding your books and audiobooks. Covers and metadata are read automatically."
+              action={{ label: 'Choose a folder', onClick: () => void handleAddFolder() }}
             />
+          )}
 
-            {visibleItems.length === 0 ? (
-              <EmptyState
-                icon={<SearchX className="h-6 w-6" />}
-                title="Nothing matches"
-                body="Try a different search term, or switch the filter back to All."
+          {!hasLibrary && isScanning && <LibrarySkeleton />}
+
+          {hasLibrary && activeFilter === 'collections' && (
+            <div className="space-y-4 pt-1">
+              <div className="flex items-center justify-between">
+                <h2 className="px-0.5 text-[11px] font-semibold uppercase tracking-[0.13em] text-[var(--text-tertiary)]">
+                  Collections & Series
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingCollection(null);
+                    setIsCollectionModalOpen(true);
+                  }}
+                  className="button-secondary flex items-center gap-1.5 text-[12px]"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  New Collection
+                </button>
+              </div>
+
+              <SuggestedSeriesBanner
+                suggestions={suggestedSeries}
+                onAccept={handleAcceptSuggestedSeries}
+                onDismiss={handleDismissSuggestedSeries}
               />
-            ) : (
-              <>
-                {continueItems.length > 0 && (
-                  <h2 className="mb-2.5 px-0.5 text-[11px] font-semibold uppercase tracking-[0.13em] text-[var(--text-tertiary)]">
-                    All titles
-                  </h2>
-                )}
+
+              {visibleCollections.length === 0 ? (
+                <EmptyState
+                  icon={<Layers className="h-6 w-6" />}
+                  title={searchQuery.trim() ? 'No collections match' : 'No collections yet'}
+                  body={
+                    searchQuery.trim()
+                      ? 'Try a different search term.'
+                      : 'Organize your reading into series and custom thematic collections spanning books and audiobooks.'
+                  }
+                  action={
+                    searchQuery.trim()
+                      ? undefined
+                      : {
+                          label: 'New Collection',
+                          onClick: () => {
+                            setEditingCollection(null);
+                            setIsCollectionModalOpen(true);
+                          },
+                        }
+                  }
+                />
+              ) : (
                 <div className="library-grid">
-                  {visibleItems.map((item) => (
-                    <BookCard
-                      key={item.id}
-                      item={item}
-                      progress={library.progress[item.id]}
-                      isPlaying={activeAudioItem?.id === item.id}
-                      onOpen={openItem}
-                    />
-                  ))}
+                  {visibleCollections.map((col) => {
+                    const resolvedWorks = resolveCollectionMembers(col, library.items);
+                    const unresolvedCount = getUnresolvedMemberCount(col, library.items);
+                    return (
+                      <CollectionCard
+                        key={col.id}
+                        collection={col}
+                        resolvedWorks={resolvedWorks}
+                        unresolvedCount={unresolvedCount}
+                        onClick={() => setActiveCollectionId(col.id)}
+                      />
+                    );
+                  })}
                 </div>
-              </>
-            )}
-          </>
-        )}
-      </main>
+              )}
+            </div>
+          )}
+
+          {hasLibrary && activeFilter !== 'collections' && (
+            <>
+              <ContinueShelf
+                items={continueItems}
+                progress={library.progress}
+                activeAudioId={activeAudioItem?.id}
+                onOpen={openItem}
+              />
+
+              {visibleItems.length === 0 ? (
+                <EmptyState
+                  icon={<SearchX className="h-6 w-6" />}
+                  title="Nothing matches"
+                  body="Try a different search term, or switch the filter back to All."
+                />
+              ) : (
+                <>
+                  {continueItems.length > 0 && (
+                    <h2 className="mb-2.5 px-0.5 text-[11px] font-semibold uppercase tracking-[0.13em] text-[var(--text-tertiary)]">
+                      All titles
+                    </h2>
+                  )}
+                  <div className="library-grid">
+                    {visibleItems.map((item) => (
+                      <BookCard
+                        key={item.id}
+                        item={item}
+                        progress={library.progress[item.id]}
+                        isPlaying={activeAudioItem?.id === item.id}
+                        onOpen={openItem}
+                        onAddToCollection={(it) => setAddToCollectionItem(it)}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </main>
+      )}
 
       {activeAudioItem && (
         <AudioPlayerBar
@@ -503,6 +766,7 @@ export default function App() {
             bookmarks={library.bookmarks[activeBookItem.id] ?? []}
             onClose={() => setActiveBookItem(null)}
             onProgressUpdate={handleBookProgress}
+            onMetadataUpdate={handleMetadataUpdate}
             onAddBookmark={(itemId, chapterIndex, excerpt) =>
               addBookmark(itemId, chapterIndex, `Chapter ${chapterIndex + 1}`, excerpt)
             }
@@ -532,6 +796,27 @@ export default function App() {
         totalItems={counts.all}
         booksCount={counts.books}
         audioCount={counts.audio}
+      />
+
+      <CollectionModal
+        isOpen={isCollectionModalOpen}
+        collection={editingCollection}
+        onClose={() => {
+          setIsCollectionModalOpen(false);
+          setEditingCollection(null);
+        }}
+        onSave={handleCreateOrUpdateCollection}
+      />
+
+      <AddToCollectionModal
+        isOpen={Boolean(addToCollectionItem)}
+        item={addToCollectionItem}
+        collections={library.collections || []}
+        onClose={() => setAddToCollectionItem(null)}
+        onToggleCollection={handleToggleItemCollection}
+        onCreateNewCollection={() => {
+          setIsCollectionModalOpen(true);
+        }}
       />
     </div>
   );

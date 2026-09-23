@@ -56,11 +56,25 @@ export interface Bookmark {
   note?: string;
 }
 
+export type CollectionKind = 'series' | 'theme';
+
+export interface Collection {
+  id: string;
+  name: string;
+  description?: string;
+  kind: CollectionKind;
+  /** Ordered list of stable item IDs (computeStableId). Order is surfaced in the UI when kind === 'series'. */
+  memberIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface LibraryState {
   folders: string[];
   items: MediaItem[];
   progress: Record<string, ProgressItem>;
   bookmarks: Record<string, Bookmark[]>;
+  collections: Collection[];
 }
 
 export type SortKey = 'recent' | 'title' | 'author' | 'added';

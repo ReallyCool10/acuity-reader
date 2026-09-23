@@ -12,6 +12,14 @@ import {
   getCurrentlyReading,
   getLibraryStats,
   exportReadingSummaryMarkdown,
+  listCollections,
+  getCollection,
+  createCollection,
+  updateCollection,
+  deleteCollection,
+  addBookToCollection,
+  removeBookFromCollection,
+  getSuggestedSeries,
 } from './storage';
 import {
   getEpubChapterList,
@@ -122,6 +130,31 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
             uri: uri.href,
             mimeType: 'application/json',
             text: JSON.stringify(stats, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // Resource 5: acuity://collections - All user-created collections
+  server.resource(
+    'collections',
+    'acuity://collections',
+    async (uri) => {
+      const { collections } = await listCollections({}, customStoragePath);
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(
+              {
+                totalCollections: collections.length,
+                collections,
+              },
+              null,
+              2
+            ),
           },
         ],
       };
@@ -618,6 +651,236 @@ export function createAcuityMcpServer(customStoragePath?: string): McpServer {
         return {
           isError: true,
           content: [{ type: 'text', text: `Failed to export reading summary: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 15: list_collections
+  server.tool(
+    'list_collections',
+    'List all user-created collections (series or thematic groupings), with member counts, format breakdown, and filter options.',
+    {
+      kind: z.enum(['series', 'theme']).optional().describe('Optional filter by collection kind: series or theme'),
+      query: z.string().optional().describe('Optional search query to filter collections by name or description'),
+    },
+    async ({ kind, query }) => {
+      try {
+        const result = await listCollections({ kind, query }, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to list collections: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 16: get_collection
+  server.tool(
+    'get_collection',
+    'Get full details of a collection, including resolved member works, companion pairing, and reading progress.',
+    {
+      collectionId: z.string().describe('The unique ID of the collection'),
+    },
+    async ({ collectionId }) => {
+      try {
+        const collection = await getCollection(collectionId, customStoragePath);
+        if (!collection) {
+          return {
+            isError: true,
+            content: [{ type: 'text', text: `Collection not found with ID: ${collectionId}` }],
+          };
+        }
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(collection, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to get collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 17: create_collection
+  server.tool(
+    'create_collection',
+    'Create a new collection or series grouping spanning audiobooks, EPUBs, and PDFs.',
+    {
+      name: z.string().describe('The name of the collection (e.g. "The Expanse" or "Favorites")'),
+      kind: z.enum(['series', 'theme']).default('series').describe('Collection kind: "series" for ordered sequential works, "theme" for general groupings'),
+      description: z.string().optional().describe('Optional description or notes for the collection'),
+      memberIds: z.array(z.string()).optional().describe('Initial list of stable book or audiobook IDs to include'),
+    },
+    async ({ name, kind, description, memberIds }) => {
+      try {
+        const collection = await createCollection({ name, kind, description, memberIds }, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(collection, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to create collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 18: update_collection
+  server.tool(
+    'update_collection',
+    'Update an existing collection name, description, kind, or member order.',
+    {
+      collectionId: z.string().describe('The ID of the collection to update'),
+      name: z.string().optional().describe('New name for the collection'),
+      kind: z.enum(['series', 'theme']).optional().describe('New kind: series or theme'),
+      description: z.string().optional().describe('New description for the collection'),
+      memberIds: z.array(z.string()).optional().describe('Updated ordered list of member item IDs'),
+    },
+    async ({ collectionId, name, kind, description, memberIds }) => {
+      try {
+        const updated = await updateCollection(collectionId, { name, kind, description, memberIds }, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(updated, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to update collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 19: delete_collection
+  server.tool(
+    'delete_collection',
+    'Delete a collection by ID. Does not delete any member books from the library.',
+    {
+      collectionId: z.string().describe('The ID of the collection to delete'),
+    },
+    async ({ collectionId }) => {
+      try {
+        const success = await deleteCollection(collectionId, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ success, collectionId }),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to delete collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 20: add_to_collection
+  server.tool(
+    'add_to_collection',
+    'Add a book or audiobook to a collection by its stable ID.',
+    {
+      collectionId: z.string().describe('The ID of the collection'),
+      bookId: z.string().describe('The stable ID of the book or audiobook to add'),
+    },
+    async ({ collectionId, bookId }) => {
+      try {
+        const updated = await addBookToCollection(collectionId, bookId, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(updated, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to add book to collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 21: remove_from_collection
+  server.tool(
+    'remove_from_collection',
+    'Remove a book or audiobook from a collection.',
+    {
+      collectionId: z.string().describe('The ID of the collection'),
+      bookId: z.string().describe('The stable ID of the book or audiobook to remove'),
+    },
+    async ({ collectionId, bookId }) => {
+      try {
+        const updated = await removeBookFromCollection(collectionId, bookId, customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(updated, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to remove book from collection: ${err instanceof Error ? err.message : String(err)}` }],
+        };
+      }
+    }
+  );
+
+  // Tool 22: get_suggested_series
+  server.tool(
+    'get_suggested_series',
+    'Detect potential series suggestions from title metadata and album tags in the library.',
+    {},
+    async () => {
+      try {
+        const suggestions = await getSuggestedSeries(customStoragePath);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(suggestions, null, 2),
+            },
+          ],
+        };
+      } catch (err: unknown) {
+        return {
+          isError: true,
+          content: [{ type: 'text', text: `Failed to detect suggested series: ${err instanceof Error ? err.message : String(err)}` }],
         };
       }
     }

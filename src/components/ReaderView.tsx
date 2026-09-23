@@ -25,6 +25,7 @@ import {
   VOICE_GROUP_LOCAL,
   VOICE_GROUP_ONLINE,
 } from '../lib/tts';
+import { cleanTitleString } from '../lib/metadata';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
 
 interface ReaderViewProps {
@@ -36,6 +37,7 @@ interface ReaderViewProps {
   onAddBookmark: (itemId: string, chapterIndex: number, excerpt: string) => void;
   onRemoveBookmark?: (bookmarkId: string) => void;
   onSwitchToAudio?: (companionPath: string) => void;
+  onMetadataUpdate?: (itemId: string, metadata: { title?: string; author?: string }) => void;
 }
 
 const EpubReaderView: React.FC<ReaderViewProps> = ({
@@ -47,14 +49,18 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   onAddBookmark,
   onRemoveBookmark,
   onSwitchToAudio,
+  onMetadataUpdate,
 }) => {
   const scrollRef = useRef<HTMLElement | null>(null);
   const proseRef = useRef<HTMLDivElement | null>(null);
   const narrationMapRef = useRef<NarrationMap | null>(null);
   /** Set while restoring a saved position, to stop the scroll handler overwriting it. */
   const restoringRef = useRef(false);
+  const onMetadataUpdateRef = useRef(onMetadataUpdate);
+  onMetadataUpdateRef.current = onMetadataUpdate;
 
   const [chapters, setChapters] = useState<EpubChapter[]>([]);
+  const [bookMeta, setBookMeta] = useState<{ title?: string; author?: string }>({});
   const [chapterIndex, setChapterIndex] = useState(initialProgress?.chapterIndex ?? 0);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'unsupported'>('loading');
   const [errorMessage, setErrorMessage] = useState('');
@@ -503,6 +509,11 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
         mintedUrls = book.objectUrls;
         setChapters(book.chapters);
         setChapterIndex((prev) => Math.min(prev, book.chapters.length - 1));
+        const cleanBookTitle = book.title ? cleanTitleString(book.title) : undefined;
+        setBookMeta({ title: cleanBookTitle, author: book.author });
+        if (cleanBookTitle && cleanBookTitle !== item.title) {
+          onMetadataUpdateRef.current?.(item.id, { title: cleanBookTitle, author: book.author || item.author });
+        }
         setStatus('ready');
       } catch (err) {
         if (cancelled) return;
@@ -668,7 +679,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
   return (
     <ReaderShell
-      title={item.title}
+      title={bookMeta.title || cleanTitleString(item.title) || item.title}
       subtitle={currentChapter?.title ?? item.author}
       theme={theme}
       onThemeChange={setTheme}

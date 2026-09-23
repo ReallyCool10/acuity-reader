@@ -17,6 +17,14 @@ import {
   getCurrentlyReading,
   normalizePercent,
   exportReadingSummaryMarkdown,
+  listCollections,
+  getCollection,
+  createCollection,
+  updateCollection,
+  deleteCollection,
+  addBookToCollection,
+  removeBookFromCollection,
+  getSuggestedSeries,
 } from './storage';
 import type { LibraryState } from '../src/types';
 
@@ -90,6 +98,7 @@ describe('mcp-server/storage', () => {
           },
         ],
       },
+      collections: [],
     };
     await saveLibraryState(sampleState, tempFilePath);
   });
@@ -235,5 +244,86 @@ describe('mcp-server/storage', () => {
     expect(md).toContain('Dune Audiobook');
     expect(md).toContain('Pride and Prejudice');
     expect(md).toContain('Chapter 2 Quote');
+  });
+
+  describe('collections operations', () => {
+    it('creates, lists, updates, and deletes collections', async () => {
+      // 1. Create a series collection
+      const col = await createCollection(
+        {
+          name: 'Classic Literature',
+          kind: 'theme',
+          description: 'Timeless masterpieces',
+          memberIds: ['item-1'],
+        },
+        tempFilePath
+      );
+      expect(col.id).toMatch(/^col_/);
+      expect(col.name).toBe('Classic Literature');
+      expect(col.memberIds).toEqual(['item-1']);
+
+      // 2. List collections
+      const list = await listCollections({}, tempFilePath);
+      expect(list.totalMatches).toBe(1);
+      expect(list.collections[0].name).toBe('Classic Literature');
+      expect(list.collections[0].availableMembers).toBe(1);
+      expect(list.collections[0].bookCount).toBe(1);
+
+      // 3. Add book to collection
+      const withSecond = await addBookToCollection(col.id, 'item-2', tempFilePath);
+      expect(withSecond.memberIds).toEqual(['item-1', 'item-2']);
+
+      // 4. Get collection details
+      const details = await getCollection(col.id, tempFilePath);
+      expect(details).not.toBeNull();
+      expect(details?.works.length).toBe(2);
+      expect(details?.works[0].title).toBe('Pride and Prejudice');
+      expect(details?.works[0].book?.progressPercent).toBe(35);
+      expect(details?.works[1].title).toBe('The Great Gatsby');
+
+      // 5. Update collection
+      const updated = await updateCollection(
+        col.id,
+        { name: 'Great Classics', kind: 'series' },
+        tempFilePath
+      );
+      expect(updated.name).toBe('Great Classics');
+      expect(updated.kind).toBe('series');
+
+      // 6. Remove book from collection
+      const removed = await removeBookFromCollection(col.id, 'item-1', tempFilePath);
+      expect(removed.memberIds).toEqual(['item-2']);
+
+      // 7. Delete collection
+      const deleted = await deleteCollection(col.id, tempFilePath);
+      expect(deleted).toBe(true);
+
+      const afterDelete = await listCollections({}, tempFilePath);
+      expect(afterDelete.totalMatches).toBe(0);
+    });
+
+    it('filters collections by kind and search query', async () => {
+      await createCollection({ name: 'Dune Chronicles', kind: 'series' }, tempFilePath);
+      await createCollection({ name: 'Bedtime Stories', kind: 'theme' }, tempFilePath);
+
+      const seriesOnly = await listCollections({ kind: 'series' }, tempFilePath);
+      expect(seriesOnly.totalMatches).toBe(1);
+      expect(seriesOnly.collections[0].name).toBe('Dune Chronicles');
+
+      const searched = await listCollections({ query: 'bedtime' }, tempFilePath);
+      expect(searched.totalMatches).toBe(1);
+      expect(searched.collections[0].name).toBe('Bedtime Stories');
+    });
+
+    it('surfaces library statistics including totalCollections', async () => {
+      await createCollection({ name: 'My Series', kind: 'series' }, tempFilePath);
+      const stats = await getLibraryStats(tempFilePath);
+      expect(stats.totalCollections).toBe(1);
+    });
+
+    it('returns suggested series from library state', async () => {
+      const suggestions = await getSuggestedSeries(tempFilePath);
+      expect(Array.isArray(suggestions)).toBe(true);
+    });
   });
 });

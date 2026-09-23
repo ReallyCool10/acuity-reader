@@ -148,4 +148,49 @@ describe('electron/id - migrateLibraryState', () => {
     const { migratedCount } = migrateLibraryState(modernState);
     expect(migratedCount).toBe(0);
   });
+
+  it('migrates legacy item IDs within collection memberIds and preserves unmigrated ones', () => {
+    const oldPath = 'C:\\Books\\Neuromancer.epub';
+    const oldLegacyId = Buffer.from(oldPath).toString('base64');
+    const stableIdOther = computeStableId('Count Zero', 'William Gibson', 800000);
+    const unresolvableId = 'offline_item_1234';
+
+    const initialState: StoredLibraryState = {
+      items: [
+        {
+          id: oldLegacyId,
+          title: 'Neuromancer',
+          author: 'William Gibson',
+          filePath: oldPath,
+          mediaType: 'book',
+          format: 'epub',
+          fileSize: 750000,
+          dateAdded: 1600000000000,
+          dirName: 'Books',
+        },
+      ],
+      collections: [
+        {
+          id: 'col-sprawl',
+          name: 'Sprawl Trilogy',
+          kind: 'series',
+          memberIds: [oldLegacyId, stableIdOther, unresolvableId],
+          createdAt: 1650000000000,
+          updatedAt: 1650000000000,
+        },
+      ],
+    };
+
+    const { state: migrated, migratedCount } = migrateLibraryState(initialState);
+    expect(migratedCount).toBe(1);
+
+    const expectedNewId = computeStableId('Neuromancer', 'William Gibson', 750000, oldPath);
+    expect(migrated.collections).toBeDefined();
+    expect(migrated.collections![0].memberIds).toEqual([
+      expectedNewId,
+      stableIdOther,
+      unresolvableId,
+    ]);
+  });
 });
+

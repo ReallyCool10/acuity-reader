@@ -103,17 +103,29 @@ export interface StoredMediaItem {
   coverUrl?: string;
 }
 
+export interface StoredCollection {
+  id: string;
+  name: string;
+  description?: string;
+  kind: 'series' | 'theme';
+  memberIds: string[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface StoredLibraryState {
   folders?: string[];
   items?: StoredMediaItem[];
   progress?: Record<string, StoredProgressItem>;
   bookmarks?: Record<string, StoredBookmark[]>;
+  collections?: StoredCollection[];
 }
 
 /**
  * Migrate legacy path-keyed library state to stable IDs.
  *
- * Rewrites items[].id, progress keys & id, and bookmarks keys & itemId.
+ * Rewrites items[].id, progress keys & id, bookmarks keys & itemId,
+ * and collections[].memberIds.
  * Returns the migrated state and the number of migrated IDs.
  */
 export function migrateLibraryState(state: StoredLibraryState): {
@@ -121,12 +133,20 @@ export function migrateLibraryState(state: StoredLibraryState): {
   migratedCount: number;
 } {
   if (!state || !Array.isArray(state.items)) {
-    return { state: state || {}, migratedCount: 0 };
+    return {
+      state: {
+        ...(state || {}),
+        collections: Array.isArray(state?.collections) ? state.collections : [],
+      },
+      migratedCount: 0,
+    };
   }
 
   const items = [...state.items];
   const progress: Record<string, StoredProgressItem> = { ...(state.progress || {}) };
   const bookmarks: Record<string, StoredBookmark[]> = { ...(state.bookmarks || {}) };
+  const rawCollections = Array.isArray(state.collections) ? state.collections : [];
+  const idMap = new Map<string, string>();
   let migratedCount = 0;
 
   for (let i = 0; i < items.length; i++) {
@@ -137,6 +157,7 @@ export function migrateLibraryState(state: StoredLibraryState): {
     if (oldId !== newId) {
       migratedCount++;
       items[i] = { ...item, id: newId };
+      idMap.set(oldId, newId);
 
       // Migrate progress entry if present under old ID
       if (progress[oldId]) {
@@ -155,12 +176,27 @@ export function migrateLibraryState(state: StoredLibraryState): {
     }
   }
 
+  // Remap member IDs in collections
+  const collections = rawCollections.map((col) => {
+    let changed = false;
+    const newMemberIds = (col.memberIds || []).map((mid) => {
+      const mapped = idMap.get(mid);
+      if (mapped && mapped !== mid) {
+        changed = true;
+        return mapped;
+      }
+      return mid;
+    });
+    return changed ? { ...col, memberIds: newMemberIds } : col;
+  });
+
   return {
     state: {
       ...state,
       items,
       progress,
       bookmarks,
+      collections,
     },
     migratedCount,
   };

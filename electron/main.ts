@@ -23,6 +23,7 @@ import { registerAllowedRoot, isAllowedPath } from './paths';
 import { computeStableId, migrateLibraryState } from './id';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
+import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
 import {
   configureMcpRuntime,
@@ -461,41 +462,64 @@ function cacheKeyFor(filePath: string): string {
   return crypto.createHash('md5').update(filePath).digest('hex');
 }
 
+async function isDedicatedWorkDirectory(dirPath: string): Promise<boolean> {
+  try {
+    const entries = await fs.promises.readdir(dirPath, { withFileTypes: true });
+    const mediaFiles = entries.filter((e) => {
+      if (!e.isFile()) return false;
+      const ext = path.extname(e.name).toLowerCase();
+      return AUDIO_EXTS.has(ext) || BOOK_EXTS.has(ext);
+    });
+
+    if (mediaFiles.length <= 1) return true;
+
+    // Check if all files in the directory share the same base title/album (e.g. multi-track CD/chapters)
+    const titles = new Set<string>();
+    for (const f of mediaFiles) {
+      const { title } = cleanTitle(f.name);
+      titles.add(title.toLowerCase());
+    }
+
+    return titles.size === 1;
+  } catch {
+    return false;
+  }
+}
+
 async function findOrExtractCover(
   filePath: string,
   mediaType: 'audio' | 'book',
   dirPath: string,
-  fileName: string
+  fileName: string,
+  existingPictureData?: Uint8Array
 ): Promise<string | undefined> {
   try {
     const baseName = path.parse(fileName).name;
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
 
+    // 1. Exact baseName match in directory (e.g. Dune.jpg next to Dune.m4b or Dune.epub)
     for (const imgExt of imageExtensions) {
       const candidate = path.join(dirPath, baseName + imgExt);
       if (fs.existsSync(candidate)) return candidate;
     }
 
-    for (const name of ['cover', 'folder', 'front', 'albumart']) {
-      for (const imgExt of imageExtensions) {
-        const candidate = path.join(dirPath, name + imgExt);
-        if (fs.existsSync(candidate)) return candidate;
-      }
-    }
-
+    // 2. Embedded artwork takes absolute precedence over generic folder images
     const cachedCoverPath = path.join(getCoversDir(), `${cacheKeyFor(filePath)}.jpg`);
     if (fs.existsSync(cachedCoverPath)) return cachedCoverPath;
 
     if (mediaType === 'audio') {
       try {
-        const metadata = await mm.parseFile(filePath, { skipPostHeaders: true });
-        const picture = metadata.common?.picture?.[0];
-        if (picture?.data?.length) {
-          await fs.promises.writeFile(cachedCoverPath, picture.data);
+        let picData = existingPictureData;
+        if (!picData) {
+          const metadata = await mm.parseFile(filePath, { skipPostHeaders: true });
+          picData = metadata.common?.picture?.[0]?.data;
+        }
+        if (picData && picData.length > 0) {
+          await fs.promises.writeFile(cachedCoverPath, picData);
           return cachedCoverPath;
         }
       } catch {
-        // Unreadable tags are common; fall through to the procedural jacket.
+        // Tag parsing error; fall through
       }
     }
 
@@ -510,59 +534,26 @@ async function findOrExtractCover(
           return cachedCoverPath;
         }
       } catch {
-        // Malformed archive; the card falls back to a generated jacket.
+        // Malformed archive; card falls back to generated jacket.
+      }
+    }
+
+    // 3. Generic directory covers (cover.jpg, folder.jpg, front.jpg, albumart.jpg):
+    // ONLY allowed if this directory is dedicated to a SINGLE distinct book/work!
+    // If the directory has multiple different books/titles (e.g. C:\Audiobooks or a shared author folder with 5 books),
+    // generic images MUST NOT be shared across all of them — they fall back to undefined ("clean cover with just the name").
+    if (await isDedicatedWorkDirectory(dirPath)) {
+      for (const name of ['cover', 'folder', 'front', 'albumart']) {
+        for (const imgExt of imageExtensions) {
+          const candidate = path.join(dirPath, name + imgExt);
+          if (fs.existsSync(candidate)) return candidate;
+        }
       }
     }
   } catch (err) {
     logError('cover', err);
   }
   return undefined;
-}
-
-/**
- * Read real title/author from an EPUB's package document.
- *
- * Filenames are a poor source of metadata, and guessing "Author - Title" from
- * them mislabels anything that does not follow that convention.
- */
-async function readEpubMetadata(filePath: string): Promise<{ title?: string; author?: string }> {
-  try {
-    const zip = await JSZip.loadAsync(await fs.promises.readFile(filePath));
-    const containerFile = zip.file('META-INF/container.xml');
-    if (!containerFile) return {};
-
-    const containerXml = await containerFile.async('text');
-    const opfPath = containerXml.match(/full-path="([^"]+)"/)?.[1];
-    if (!opfPath) return {};
-
-    const opfFile = zip.file(opfPath);
-    if (!opfFile) return {};
-
-    const opf = await opfFile.async('text');
-    const pick = (field: string) =>
-      opf
-        .match(new RegExp(`<(?:dc:)?${field}[^>]*>([\\s\\S]*?)</(?:dc:)?${field}>`, 'i'))?.[1]
-        ?.replace(/<[^>]+>/g, '')
-        .trim();
-
-    return { title: pick('title'), author: pick('creator') };
-  } catch {
-    return {};
-  }
-}
-
-/** Strip leading track numbers and split a conventional "Author - Title" filename. */
-function cleanTitle(filename: string): { title: string; author: string } {
-  const nameWithoutExt = filename.substring(0, filename.lastIndexOf('.')) || filename;
-  const cleaned = nameWithoutExt.replace(/^(\d+[\s._-]+)+/i, '').trim();
-
-  const dashMatch = cleaned.match(/^([^-]+)\s*-\s*(.+)$/);
-  if (dashMatch) return { author: dashMatch[1].trim(), title: dashMatch[2].trim() };
-
-  const parenMatch = cleaned.match(/^([^(]+)\s*\(([^)]+)\)$/);
-  if (parenMatch) return { title: parenMatch[1].trim(), author: parenMatch[2].trim() };
-
-  return { title: cleaned, author: '' };
 }
 
 interface ScannedItem {
@@ -615,9 +606,17 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       const stats = await fs.promises.stat(fullPath);
 
       // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
+      // Invalidate if the cached item contains a corrupted shadow-library title or a generic folder cover.
       const cached = itemMetadataCache.get(fullPath);
+      const hasCorruptedTitle =
+        cached?.title && /(?:zblibrary|z-lib|1lib|libgen|\.sk\b|etc\.\))/i.test(cached.title);
+      const hasGenericCover =
+        cached?.coverUrl && /(?:cover|folder|front|albumart)\.(?:jpe?g|png|webp)$/i.test(cached.coverUrl);
+
       if (
         cached &&
+        !hasCorruptedTitle &&
+        !hasGenericCover &&
         cached.fileSize === stats.size &&
         Math.abs(cached.dateAdded - stats.mtimeMs) < 1000
       ) {
@@ -639,6 +638,7 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       let discNumber: number | undefined;
       let album: string | undefined;
       let chapters: AudioChapter[] | undefined;
+      let audioPictureData: Uint8Array | undefined;
 
       // Embedded metadata beats filename guessing wherever it exists.
       if (mediaType === 'audio') {
@@ -656,6 +656,9 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
           if (meta.common?.track?.no) trackNumber = meta.common.track.no;
           if (meta.common?.disk?.no) discNumber = meta.common.disk.no;
           if (meta.common?.album) album = meta.common.album;
+          if (meta.common?.picture?.[0]?.data?.length) {
+            audioPictureData = meta.common.picture[0].data;
+          }
 
           if (meta.format?.chapters && meta.format.chapters.length > 0) {
             chapters = parseAudioChapters(meta.format.chapters, meta.format.sampleRate, durationSeconds);
@@ -677,6 +680,10 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         const meta = await readEpubMetadata(fullPath);
         if (meta.title) title = meta.title;
         if (meta.author) author = meta.author;
+      } else if (ext === '.pdf') {
+        const meta = await readPdfMetadata(fullPath);
+        if (meta.title) title = meta.title;
+        if (meta.author) author = meta.author;
       }
 
       const finalAuthor = author || parentDirName || 'Unknown';
@@ -693,7 +700,7 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         dateAdded: stats.mtimeMs,
         dirName: parentDirName,
         durationSeconds,
-        coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name),
+        coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name, audioPictureData),
         trackNumber,
         discNumber,
         album,
@@ -775,8 +782,47 @@ ipcMain.handle('storage:load', async () => {
     if (fs.existsSync(filePath)) {
       const parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
       const { state: migrated, migratedCount } = migrateLibraryState(parsed);
-      if (migratedCount > 0) {
-        logInfo('storage-migrate', `Migrated ${migratedCount} legacy library items to stable IDs`);
+      let libraryModified = migratedCount > 0;
+
+      // 1. Sanitize titles for any items with shadow library markers or malformed endings
+      for (const item of (migrated.items || []) as ScannedItem[]) {
+        if (item.title && /(?:zblibrary|z-lib|1lib|libgen|\.sk\b|etc\.\))/i.test(item.title)) {
+          const cleaned = cleanTitle(item.filePath || item.title);
+          if (cleaned.title && cleaned.title !== item.title) {
+            item.title = cleaned.title;
+            if (cleaned.author && (!item.author || item.author === 'Unknown')) {
+              item.author = cleaned.author;
+            }
+            libraryModified = true;
+          }
+        }
+      }
+
+      // 2. Identify generic covers (cover.jpg, folder.jpg) that were falsely shared across different titles
+      const genericCoverTitles = new Map<string, Set<string>>();
+      for (const item of (migrated.items || []) as ScannedItem[]) {
+        if (item.coverUrl && /(?:cover|folder|front|albumart)\.(?:jpe?g|png|webp)$/i.test(item.coverUrl)) {
+          if (!genericCoverTitles.has(item.coverUrl)) {
+            genericCoverTitles.set(item.coverUrl, new Set());
+          }
+          genericCoverTitles.get(item.coverUrl)!.add(item.title.toLowerCase());
+        }
+      }
+
+      for (const item of (migrated.items || []) as ScannedItem[]) {
+        if (item.coverUrl && genericCoverTitles.has(item.coverUrl)) {
+          const titles = genericCoverTitles.get(item.coverUrl)!;
+          if (titles.size > 1) {
+            // Shared generic cover across distinct titles!
+            // Clear it so it falls back to a clean procedural cover with just the name
+            item.coverUrl = undefined;
+            libraryModified = true;
+          }
+        }
+      }
+
+      if (libraryModified) {
+        logInfo('storage-load', `Sanitized library metadata and covers on load`);
         void writeStoreAtomically(migrated);
       }
       for (const item of (migrated.items || []) as ScannedItem[]) {
@@ -786,13 +832,16 @@ ipcMain.handle('storage:load', async () => {
       }
       for (const folder of migrated?.folders ?? []) registerAllowedRoot(folder);
       registerAllowedRoot(getCoversDir());
-      return migrated;
+      return {
+        ...migrated,
+        collections: Array.isArray(migrated.collections) ? migrated.collections : [],
+      };
     }
   } catch (err) {
     logError('storage-load', err);
   }
   registerAllowedRoot(getCoversDir());
-  return { folders: [], items: [], progress: {}, bookmarks: {} };
+  return { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
 });
 
 /**

@@ -18,6 +18,7 @@ import {
   VOICE_GROUP_LOCAL,
   VOICE_GROUP_ONLINE,
 } from '../lib/tts';
+import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
 import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell';
 
@@ -30,6 +31,7 @@ interface PdfReaderViewProps {
   onAddBookmark: (itemId: string, chapterIndex: number, excerpt: string) => void;
   onRemoveBookmark?: (bookmarkId: string) => void;
   onSwitchToAudio?: (companionPath: string) => void;
+  onMetadataUpdate?: (itemId: string, metadata: { title?: string; author?: string }) => void;
 }
 
 export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
@@ -41,6 +43,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   onAddBookmark,
   onRemoveBookmark,
   onSwitchToAudio,
+  onMetadataUpdate,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
@@ -48,6 +51,10 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
   const restoringRef = useRef(false);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
+  const onMetadataUpdateRef = useRef(onMetadataUpdate);
+  onMetadataUpdateRef.current = onMetadataUpdate;
+  const itemRef = useRef(item);
+  itemRef.current = item;
 
   const [pdfDoc, setPdfDoc] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
   const [pdfInfo, setPdfInfo] = useState<PdfDocumentInfo | null>(null);
@@ -127,6 +134,15 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         if (cancelled) {
           void doc.destroy();
           return;
+        }
+
+        const currentItem = itemRef.current;
+        const cleanPdfTitle = info.title ? cleanTitleString(info.title) : undefined;
+        if (cleanPdfTitle && cleanPdfTitle !== currentItem.title) {
+          onMetadataUpdateRef.current?.(currentItem.id, {
+            title: cleanPdfTitle,
+            author: info.author || currentItem.author,
+          });
         }
 
         loaded = doc;
@@ -704,7 +720,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   return (
     <ReaderShell
-      title={pdfInfo?.title || item.title}
+      title={cleanTitleString(pdfInfo?.title || '') || cleanTitleString(item.title) || item.title}
       subtitle={totalPages > 0 ? `Page ${currentPage} of ${totalPages}` : item.author}
       theme={theme}
       onThemeChange={setTheme}

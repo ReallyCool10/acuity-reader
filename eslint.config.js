@@ -7,9 +7,11 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'dist-electron/**',
+      'dist-mcp/**',
       'dist-packages/**',
       'node_modules/**',
       'scripts/**',
+      'scratch/**',
       'coverage/**',
       '**/*.d.ts'
     ],

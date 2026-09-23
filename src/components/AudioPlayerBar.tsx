@@ -21,6 +21,7 @@ import {
 import type { Bookmark as BookmarkType, MediaItem } from '../types';
 import { coverUrl, mediaUrl } from '../lib/media';
 import { formatRemaining, formatTime } from '../lib/format';
+import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { useDismissable } from '../hooks/useDismissable';
 import { Scrubber } from './Scrubber';
@@ -121,6 +122,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
   const src = useMemo(() => mediaUrl(item.filePath), [item.filePath]);
   const cover = coverUrl(item);
+  const displayTitle = useMemo(() => cleanTitleString(item.title) || item.title, [item.title]);
 
   const togglePlay = useCallback(() => {
     const audio = audioRef.current;
@@ -156,7 +158,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   }, [volume, isMuted]);
 
   useEffect(() => {
-    window.electronAPI?.updateThumbar(isPlaying);
+    window.electronAPI?.updateThumbar?.(isPlaying);
   }, [isPlaying]);
 
   /*
@@ -241,7 +243,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
 
     try {
       navigator.mediaSession.metadata = new MediaMetadata({
-        title: item.title,
+        title: displayTitle,
         artist: item.author || 'Unknown author',
         album: activeChapter?.title || item.album || item.dirName || 'Acuity Reader',
         artwork: cover
@@ -285,7 +287,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       }
     };
   }, [
-    item.title,
+    displayTitle,
     item.author,
     item.album,
     item.dirName,
@@ -389,7 +391,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             </div>
           )}
           <div className="text-center">
-            <p className="font-serif text-[15px] font-semibold text-[var(--text-primary)]">{item.title}</p>
+            <p className="font-serif text-[15px] font-semibold text-[var(--text-primary)]">{displayTitle}</p>
             <p className="mt-0.5 text-[12px] text-[var(--text-tertiary)]">{item.author}</p>
             {remaining > 0 && (
               <p className="mt-1.5 text-[11px] text-[var(--text-tertiary)]">{formatRemaining(remaining)}</p>
@@ -435,7 +437,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
           </button>
 
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">{item.title}</p>
+            <p className="truncate text-[12.5px] font-medium text-[var(--text-primary)]">{displayTitle}</p>
             <p className="truncate text-[11px] text-[var(--text-tertiary)]">
               {item.author}
               {activeChapter ? (

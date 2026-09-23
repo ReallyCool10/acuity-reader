@@ -1,7 +1,17 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import type { Bookmark, LibraryState, MediaItem, ProgressItem } from '../src/types';
+import type { Bookmark, Collection, CollectionKind, LibraryState, MediaItem, ProgressItem } from '../src/types';
+import {
+  createCollection as createCol,
+  updateCollection as updateCol,
+  addMemberToCollection,
+  removeMemberFromCollection,
+  resolveCollectionMembers,
+  getUnresolvedMemberCount,
+  detectSeriesSuggestions,
+  type SeriesSuggestion,
+} from '../src/lib/collections';
 
 /**
  * Resolve the path to acuity_library.json.
@@ -48,6 +58,7 @@ export async function loadLibraryState(customPath?: string): Promise<LibraryStat
         items: Array.isArray(parsed.items) ? parsed.items : [],
         progress: parsed.progress && typeof parsed.progress === 'object' ? parsed.progress : {},
         bookmarks: parsed.bookmarks && typeof parsed.bookmarks === 'object' ? parsed.bookmarks : {},
+        collections: Array.isArray(parsed.collections) ? parsed.collections : [],
       };
     }
   } catch (err) {
@@ -59,6 +70,7 @@ export async function loadLibraryState(customPath?: string): Promise<LibraryStat
     items: [],
     progress: {},
     bookmarks: {},
+    collections: [],
   };
 }
 
@@ -517,6 +529,7 @@ export interface LibraryStats {
   formats: Record<string, number>;
   activeReadingCount: number;
   totalBookmarks: number;
+  totalCollections: number;
   libraryFolders: string[];
 }
 
@@ -553,9 +566,230 @@ export async function getLibraryStats(customPath?: string): Promise<LibraryStats
     totalItems: state.items.length,
     totalBooks,
     totalAudiobooks,
+    totalCollections: (state.collections || []).length,
     formats,
     activeReadingCount,
     totalBookmarks,
     libraryFolders: state.folders,
   };
+}
+
+/* ------------------------------------------------------------- COLLECTIONS */
+
+export interface CollectionSummary extends Collection {
+  totalMembers: number;
+  availableMembers: number;
+  unresolvedMembers: number;
+  bookCount: number;
+  audioCount: number;
+}
+
+export interface CollectionDetailsWork {
+  title: string;
+  author: string;
+  isDual: boolean;
+  orderIndex: number;
+  book?: {
+    id: string;
+    format: string;
+    progressPercent?: number;
+    filePath: string;
+  };
+  audio?: {
+    id: string;
+    format: string;
+    progressPercent?: number;
+    filePath: string;
+  };
+  memberIds: string[];
+}
+
+export interface CollectionDetails extends Collection {
+  works: CollectionDetailsWork[];
+  unresolvedMemberIds: string[];
+}
+
+export async function listCollections(
+  filter: { kind?: CollectionKind; query?: string } = {},
+  customPath?: string
+): Promise<{ totalMatches: number; collections: CollectionSummary[] }> {
+  const state = await loadLibraryState(customPath);
+  let collections = state.collections || [];
+
+  if (filter.kind) {
+    collections = collections.filter((c) => c.kind === filter.kind);
+  }
+
+  if (filter.query) {
+    const q = filter.query.toLowerCase().trim();
+    collections = collections.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        (c.description && c.description.toLowerCase().includes(q))
+    );
+  }
+
+  const summaries: CollectionSummary[] = collections.map((col) => {
+    const resolved = resolveCollectionMembers(col, state.items);
+    const unresolvedCount = getUnresolvedMemberCount(col, state.items);
+    let bookCount = 0;
+    let audioCount = 0;
+    for (const w of resolved) {
+      if (w.bookItem) bookCount++;
+      if (w.audioItem) audioCount++;
+    }
+
+    return {
+      ...col,
+      totalMembers: col.memberIds.length,
+      availableMembers: resolved.length,
+      unresolvedMembers: unresolvedCount,
+      bookCount,
+      audioCount,
+    };
+  });
+
+  return {
+    totalMatches: summaries.length,
+    collections: summaries,
+  };
+}
+
+export async function getCollection(
+  id: string,
+  customPath?: string
+): Promise<CollectionDetails | null> {
+  const state = await loadLibraryState(customPath);
+  const collection = (state.collections || []).find((c) => c.id === id);
+  if (!collection) return null;
+
+  const itemMap = new Map<string, MediaItem>(state.items.map((i) => [i.id, i]));
+  const resolvedWorks = resolveCollectionMembers(collection, state.items);
+  const unresolvedMemberIds = collection.memberIds.filter((mid) => !itemMap.has(mid));
+
+  const works: CollectionDetailsWork[] = resolvedWorks.map((work) => ({
+    title: work.primaryItem.title,
+    author: work.primaryItem.author,
+    isDual: work.isDual,
+    orderIndex: work.orderIndex,
+    book: work.bookItem
+      ? {
+          id: work.bookItem.id,
+          format: work.bookItem.format,
+          progressPercent: state.progress[work.bookItem.id]
+            ? Math.round(normalizePercent(state.progress[work.bookItem.id].percent))
+            : undefined,
+          filePath: work.bookItem.filePath,
+        }
+      : undefined,
+    audio: work.audioItem
+      ? {
+          id: work.audioItem.id,
+          format: work.audioItem.format,
+          progressPercent: state.progress[work.audioItem.id]
+            ? Math.round(normalizePercent(state.progress[work.audioItem.id].percent))
+            : undefined,
+          filePath: work.audioItem.filePath,
+        }
+      : undefined,
+    memberIds: work.memberIds,
+  }));
+
+  return {
+    ...collection,
+    works,
+    unresolvedMemberIds,
+  };
+}
+
+export async function createCollection(
+  input: { name: string; kind?: CollectionKind; description?: string; memberIds?: string[] },
+  customPath?: string
+): Promise<Collection> {
+  if (!input.name || !input.name.trim()) {
+    throw new Error('Collection name is required and cannot be empty.');
+  }
+  const state = await loadLibraryState(customPath);
+  const newCol = createCol(
+    input.name,
+    input.kind || 'series',
+    input.memberIds || [],
+    input.description
+  );
+  state.collections = [...(state.collections || []), newCol];
+  await saveLibraryState(state, customPath);
+  return newCol;
+}
+
+export async function updateCollection(
+  id: string,
+  patch: { name?: string; kind?: CollectionKind; description?: string; memberIds?: string[] },
+  customPath?: string
+): Promise<Collection> {
+  const state = await loadLibraryState(customPath);
+  const index = (state.collections || []).findIndex((c) => c.id === id);
+  if (index === -1) {
+    throw new Error(`Collection not found with id: ${id}`);
+  }
+
+  const existing = state.collections[index];
+  const updated = updateCol(existing, patch);
+  state.collections[index] = updated;
+  await saveLibraryState(state, customPath);
+  return updated;
+}
+
+export async function deleteCollection(
+  id: string,
+  customPath?: string
+): Promise<boolean> {
+  const state = await loadLibraryState(customPath);
+  const initialLen = (state.collections || []).length;
+  state.collections = (state.collections || []).filter((c) => c.id !== id);
+  if (state.collections.length === initialLen) {
+    return false;
+  }
+  await saveLibraryState(state, customPath);
+  return true;
+}
+
+export async function addBookToCollection(
+  collectionId: string,
+  bookId: string,
+  customPath?: string
+): Promise<Collection> {
+  const state = await loadLibraryState(customPath);
+  const index = (state.collections || []).findIndex((c) => c.id === collectionId);
+  if (index === -1) {
+    throw new Error(`Collection not found with id: ${collectionId}`);
+  }
+
+  const updated = addMemberToCollection(state.collections[index], bookId);
+  state.collections[index] = updated;
+  await saveLibraryState(state, customPath);
+  return updated;
+}
+
+export async function removeBookFromCollection(
+  collectionId: string,
+  bookId: string,
+  customPath?: string
+): Promise<Collection> {
+  const state = await loadLibraryState(customPath);
+  const index = (state.collections || []).findIndex((c) => c.id === collectionId);
+  if (index === -1) {
+    throw new Error(`Collection not found with id: ${collectionId}`);
+  }
+
+  const updated = removeMemberFromCollection(state.collections[index], bookId);
+  state.collections[index] = updated;
+  await saveLibraryState(state, customPath);
+  return updated;
+}
+
+export async function getSuggestedSeries(
+  customPath?: string
+): Promise<SeriesSuggestion[]> {
+  const state = await loadLibraryState(customPath);
+  return detectSeriesSuggestions(state.items, state.collections || []);
 }

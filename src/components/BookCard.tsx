@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BookOpen, Headphones, Play } from 'lucide-react';
+import { BookOpen, FolderPlus, Headphones, Play } from 'lucide-react';
 import type { MediaItem, ProgressItem } from '../types';
 import { coverUrl } from '../lib/media';
+import { cleanTitleString } from '../lib/metadata';
 
 interface BookCardProps {
   item: MediaItem;
   progress?: ProgressItem;
   isPlaying?: boolean;
   onOpen: (item: MediaItem) => void;
+  onAddToCollection?: (item: MediaItem) => void;
 }
 
 /**
@@ -33,7 +35,13 @@ function themeForTitle(title: string) {
   return JACKET_THEMES[Math.abs(hash) % JACKET_THEMES.length];
 }
 
-export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, onOpen }) => {
+export const BookCard: React.FC<BookCardProps> = ({
+  item,
+  progress,
+  isPlaying,
+  onOpen,
+  onAddToCollection,
+}) => {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -51,8 +59,9 @@ export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, o
   }, [src]);
 
   const showCover = Boolean(src) && !failed;
+  const displayTitle = cleanTitleString(item.title) || item.title;
 
-  const label = `${item.title}${item.author ? `, by ${item.author}` : ''}. ${
+  const label = `${displayTitle}${item.author ? `, by ${item.author}` : ''}. ${
     isAudio ? 'Audiobook' : 'Book'
   }${percent > 0 ? `, ${Math.round(percent)} percent complete` : ''}.`;
 
@@ -99,7 +108,7 @@ export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, o
                 className="line-clamp-4 font-serif text-[13px] font-semibold leading-snug"
                 style={{ color: theme.ink }}
               >
-                {item.title}
+                {displayTitle}
               </h4>
               {item.author && (
                 <p
@@ -127,6 +136,21 @@ export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, o
           >
             Dual
           </span>
+        )}
+
+        {onAddToCollection && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddToCollection(item);
+            }}
+            className="absolute left-2 top-2 z-[4] flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white/80 opacity-0 backdrop-blur-md transition-opacity duration-150 hover:bg-black/90 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
+            title="Add to Collection..."
+            aria-label={`Add ${item.title} to collection`}
+          >
+            <FolderPlus className="h-3 w-3" />
+          </button>
         )}
 
         {isAudio && (
@@ -169,9 +193,9 @@ export const BookCard: React.FC<BookCardProps> = ({ item, progress, isPlaying, o
       <div className="mt-2.5 min-w-0">
         <h4
           className="line-clamp-2 text-[12.5px] font-medium leading-snug text-[var(--text-primary)] transition-colors duration-150 group-hover:text-[var(--accent-hover)]"
-          title={item.title}
+          title={displayTitle}
         >
-          {item.title}
+          {displayTitle}
         </h4>
         <p className="mt-0.5 truncate text-[11px] text-[var(--text-tertiary)]" title={item.author}>
           {item.author}
