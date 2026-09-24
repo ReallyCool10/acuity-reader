@@ -282,7 +282,8 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
     let cumulativeOffset = 0;
     const constituentTracks: AudioTrack[] = [];
     let totalFileSize = 0;
-    let earliestDateAdded = sortedTracks[0].dateAdded;
+    let latestModified = sortedTracks[0].fileModifiedAt ?? sortedTracks[0].dateAdded ?? 0;
+    let earliestFirstSeen = sortedTracks[0].firstSeenAt ?? sortedTracks[0].dateAdded ?? Date.now();
 
     for (let i = 0; i < sortedTracks.length; i++) {
       const item = sortedTracks[i];
@@ -290,8 +291,14 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
       const offset = cumulativeOffset;
       cumulativeOffset += duration;
       totalFileSize += item.fileSize || 0;
-      if (item.dateAdded && item.dateAdded > earliestDateAdded) {
-        earliestDateAdded = item.dateAdded;
+
+      const itemMod = item.fileModifiedAt ?? item.dateAdded ?? 0;
+      if (itemMod > latestModified) {
+        latestModified = itemMod;
+      }
+      const itemSeen = item.firstSeenAt ?? item.dateAdded;
+      if (typeof itemSeen === 'number' && !Number.isNaN(itemSeen) && itemSeen < earliestFirstSeen) {
+        earliestFirstSeen = itemSeen;
       }
 
       constituentTracks.push({
@@ -378,7 +385,9 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
       mediaType: 'audio',
       format: firstItem.format,
       fileSize: totalFileSize,
-      dateAdded: earliestDateAdded,
+      fileModifiedAt: latestModified,
+      firstSeenAt: earliestFirstSeen,
+      dateAdded: earliestFirstSeen,
       dirName: firstItem.dirName,
       durationSeconds: cumulativeOffset,
       coverUrl: representativeCover,
@@ -516,3 +525,52 @@ export function carryForwardLegacyIds(previous: MediaItem[], next: MediaItem[]):
     return { ...item, legacyIds };
   });
 }
+
+/**
+ * Carry `firstSeenAt` from the previous item list onto a freshly scanned one.
+ *
+ * Scans rebuild library items from disk, where only file modification times are
+ * available. An item's "added to library" timestamp must be set once and kept
+ * across rescans. Lookups check both current ID and any recorded legacy IDs,
+ * so re-identified composites keep their original addition date.
+ */
+export function carryForwardFirstSeenAt(
+  previous: MediaItem[],
+  next: MediaItem[],
+  now: number = Date.now()
+): MediaItem[] {
+  const firstSeenById = new Map<string, number>();
+  for (const item of previous) {
+    const ts = item.firstSeenAt ?? item.dateAdded;
+    if (typeof ts === 'number' && !Number.isNaN(ts)) {
+      firstSeenById.set(item.id, ts);
+      for (const legacy of item.legacyIds ?? []) {
+        firstSeenById.set(legacy, ts);
+      }
+    }
+  }
+
+  return next.map((item) => {
+    let seen = firstSeenById.get(item.id);
+    if (seen === undefined && item.legacyIds?.length) {
+      for (const legacy of item.legacyIds) {
+        const found = firstSeenById.get(legacy);
+        if (found !== undefined) {
+          seen = found;
+          break;
+        }
+      }
+    }
+
+    const firstSeenAt = seen ?? item.firstSeenAt ?? now;
+    const fileModifiedAt = item.fileModifiedAt ?? item.dateAdded ?? now;
+
+    return {
+      ...item,
+      firstSeenAt,
+      fileModifiedAt,
+      dateAdded: firstSeenAt,
+    };
+  });
+}
+

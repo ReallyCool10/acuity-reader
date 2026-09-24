@@ -95,7 +95,9 @@ export interface StoredMediaItem {
   mediaType: 'audio' | 'book';
   format: string;
   fileSize: number;
-  dateAdded: number;
+  fileModifiedAt?: number;
+  firstSeenAt?: number;
+  dateAdded?: number;
   dirName: string;
   durationSeconds?: number;
   companionPath?: string;
@@ -131,6 +133,7 @@ export interface StoredLibraryState {
 export function migrateLibraryState(state: StoredLibraryState): {
   state: StoredLibraryState;
   migratedCount: number;
+  changed: boolean;
 } {
   if (!state || !Array.isArray(state.items)) {
     return {
@@ -139,6 +142,7 @@ export function migrateLibraryState(state: StoredLibraryState): {
         collections: Array.isArray(state?.collections) ? state.collections : [],
       },
       migratedCount: 0,
+      changed: false,
     };
   }
 
@@ -148,46 +152,64 @@ export function migrateLibraryState(state: StoredLibraryState): {
   const rawCollections = Array.isArray(state.collections) ? state.collections : [];
   const idMap = new Map<string, string>();
   let migratedCount = 0;
+  let changed = false;
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     const oldId = item.id;
     const newId = computeStableId(item.title, item.author, item.fileSize, item.filePath);
+    const targetId = newId || oldId;
 
-    if (oldId !== newId) {
-      migratedCount++;
-      items[i] = { ...item, id: newId };
-      idMap.set(oldId, newId);
+    const fileModifiedAt = item.fileModifiedAt ?? item.dateAdded ?? Date.now();
+    const firstSeenAt = item.firstSeenAt ?? item.dateAdded ?? fileModifiedAt;
+    const datesChanged = item.fileModifiedAt !== fileModifiedAt || item.firstSeenAt !== firstSeenAt;
+
+    if (oldId !== targetId || datesChanged) {
+      if (oldId !== targetId) {
+        migratedCount++;
+        idMap.set(oldId, targetId);
+      }
+      changed = true;
+      items[i] = {
+        ...item,
+        id: targetId,
+        fileModifiedAt,
+        firstSeenAt,
+        dateAdded: firstSeenAt,
+      };
 
       // Migrate progress entry if present under old ID
-      if (progress[oldId]) {
-        progress[newId] = { ...progress[oldId], id: newId };
-        delete progress[oldId];
-      }
+      if (oldId !== targetId) {
+        if (progress[oldId]) {
+          progress[targetId] = { ...progress[oldId], id: targetId };
+          delete progress[oldId];
+        }
 
-      // Migrate bookmarks array if present under old ID
-      if (bookmarks[oldId]) {
-        bookmarks[newId] = bookmarks[oldId].map((bm) => ({
-          ...bm,
-          itemId: newId,
-        }));
-        delete bookmarks[oldId];
+        // Migrate bookmarks array if present under old ID
+        if (bookmarks[oldId]) {
+          bookmarks[targetId] = bookmarks[oldId].map((bm) => ({
+            ...bm,
+            itemId: targetId,
+          }));
+          delete bookmarks[oldId];
+        }
       }
     }
   }
 
   // Remap member IDs in collections
   const collections = rawCollections.map((col) => {
-    let changed = false;
+    let collectionChanged = false;
     const newMemberIds = (col.memberIds || []).map((mid) => {
       const mapped = idMap.get(mid);
       if (mapped && mapped !== mid) {
-        changed = true;
+        collectionChanged = true;
         return mapped;
       }
       return mid;
     });
-    return changed ? { ...col, memberIds: newMemberIds } : col;
+    if (collectionChanged) changed = true;
+    return collectionChanged ? { ...col, memberIds: newMemberIds } : col;
   });
 
   return {
@@ -199,5 +221,6 @@ export function migrateLibraryState(state: StoredLibraryState): {
       collections,
     },
     migratedCount,
+    changed: changed || migratedCount > 0,
   };
 }

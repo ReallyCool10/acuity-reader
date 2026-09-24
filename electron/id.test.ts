@@ -192,5 +192,31 @@ describe('electron/id - migrateLibraryState', () => {
       unresolvableId,
     ]);
   });
+
+  it('migrates legacy dateAdded into fileModifiedAt and firstSeenAt', () => {
+    const stableId = computeStableId('Emma', 'Jane Austen', 920000, '/books/Emma.epub');
+    const legacyDateState: StoredLibraryState = {
+      items: [
+        {
+          id: stableId,
+          title: 'Emma',
+          author: 'Jane Austen',
+          filePath: '/books/Emma.epub',
+          mediaType: 'book',
+          format: 'epub',
+          fileSize: 920000,
+          dateAdded: 1600000000000,
+          dirName: 'books',
+        },
+      ],
+    };
+
+    const { state: migrated, migratedCount, changed } = migrateLibraryState(legacyDateState);
+    expect(migratedCount).toBe(0);
+    expect(changed).toBe(true);
+    expect(migrated.items![0].fileModifiedAt).toBe(1600000000000);
+    expect(migrated.items![0].firstSeenAt).toBe(1600000000000);
+    expect(migrated.items![0].dateAdded).toBe(1600000000000);
+  });
 });
 

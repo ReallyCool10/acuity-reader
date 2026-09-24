@@ -20,6 +20,8 @@ describe('electron/audio', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 1000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName,
       trackNumber,

@@ -10,6 +10,7 @@ import {
   resolveAudiobookProgress,
   migrateLegacyItemIds,
   carryForwardLegacyIds,
+  carryForwardFirstSeenAt,
   computeAudiobookGroupId,
 } from './audiobookGrouping';
 import type { LibraryState } from '../types';
@@ -40,6 +41,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 1000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'Dune',
       album: 'Dune',
@@ -55,6 +58,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 2000,
+      fileModifiedAt: 200,
+      firstSeenAt: 200,
       dateAdded: 200,
       dirName: 'Dune',
       album: 'Dune',
@@ -70,6 +75,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'book',
       format: 'pdf',
       fileSize: 500,
+      fileModifiedAt: 50,
+      firstSeenAt: 50,
       dateAdded: 50,
       dirName: 'Docs',
     };
@@ -112,6 +119,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'm4a',
       fileSize: 1000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'The Hobbit',
       durationSeconds: 300,
@@ -125,6 +134,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'm4a',
       fileSize: 1500,
+      fileModifiedAt: 110,
+      firstSeenAt: 110,
       dateAdded: 110,
       dirName: 'The Hobbit',
       durationSeconds: 400,
@@ -146,6 +157,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 1000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'Book',
       album: 'Big Book',
@@ -164,6 +177,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 1000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'Book',
       album: 'Big Book',
@@ -197,6 +212,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'm4b',
       fileSize: 50000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'Downloads',
     };
@@ -209,6 +226,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'm4b',
       fileSize: 40000,
+      fileModifiedAt: 110,
+      firstSeenAt: 110,
       dateAdded: 110,
       dirName: 'Downloads',
     };
@@ -283,6 +302,8 @@ describe('audiobookGrouping', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 10000,
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
       dateAdded: 100,
       dirName: 'Epic',
       durationSeconds: 3000,
@@ -358,6 +379,8 @@ function track(n: number, overrides: Partial<MediaItem> = {}): MediaItem {
     mediaType: 'audio',
     format: 'mp3',
     fileSize: 1000 + n,
+    fileModifiedAt: 1,
+    firstSeenAt: 1,
     dateAdded: 1,
     dirName: 'The Long Book',
     durationSeconds: 600,
@@ -490,6 +513,55 @@ describe('carryForwardLegacyIds', () => {
     const previous: MediaItem[] = [{ ...track(1), id: 'book', legacyIds: ['older'] }];
     const next: MediaItem[] = [{ ...track(1), id: 'book', legacyIds: ['formula-id'] }];
     expect(carryForwardLegacyIds(previous, next)[0].legacyIds?.sort()).toEqual(['formula-id', 'older']);
+  });
+});
+
+describe('carryForwardFirstSeenAt', () => {
+  it('preserves firstSeenAt for existing items across a rescan', () => {
+    const previous: MediaItem[] = [{ ...track(1), id: 'book-1', firstSeenAt: 1000, fileModifiedAt: 500 }];
+    const next: MediaItem[] = [{ ...track(1), id: 'book-1', firstSeenAt: 2000, fileModifiedAt: 700 }];
+    const result = carryForwardFirstSeenAt(previous, next, 3000);
+    expect(result[0].firstSeenAt).toBe(1000);
+    expect(result[0].fileModifiedAt).toBe(700);
+  });
+
+  it('preserves firstSeenAt through legacyIds when an item is re-identified', () => {
+    const previous: MediaItem[] = [{ ...track(1), id: 'old-composite-id', firstSeenAt: 1234 }];
+    const next: MediaItem[] = [{ ...track(1), id: 'new-composite-id', legacyIds: ['old-composite-id'] }];
+    const result = carryForwardFirstSeenAt(previous, next, 5000);
+    expect(result[0].firstSeenAt).toBe(1234);
+  });
+
+  it('assigns now to newly added items that were not in previous', () => {
+    const previous: MediaItem[] = [{ ...track(1), id: 'existing-book', firstSeenAt: 1000 }];
+    const next: MediaItem[] = [
+      { ...track(1), id: 'existing-book', firstSeenAt: undefined as unknown as number },
+      { ...track(2), id: 'brand-new-book', firstSeenAt: undefined as unknown as number },
+    ];
+    const fixedNow = 999999;
+    const result = carryForwardFirstSeenAt(previous, next, fixedNow);
+    expect(result[0].firstSeenAt).toBe(1000);
+    expect(result[1].firstSeenAt).toBe(fixedNow);
+  });
+
+  it('falls back to dateAdded when migrating items that lack firstSeenAt', () => {
+    const previous: MediaItem[] = [
+      { ...track(1), id: 'legacy-book', firstSeenAt: undefined as unknown as number, dateAdded: 4321 },
+    ];
+    const next: MediaItem[] = [{ ...track(1), id: 'legacy-book', firstSeenAt: undefined as unknown as number }];
+    const result = carryForwardFirstSeenAt(previous, next, 9999);
+    expect(result[0].firstSeenAt).toBe(4321);
+  });
+});
+
+describe('grouped audiobook date handling', () => {
+  it('sets fileModifiedAt to latest track modification and firstSeenAt to earliest track addition', () => {
+    const t1 = track(1, { fileModifiedAt: 200, firstSeenAt: 500 });
+    const t2 = track(2, { fileModifiedAt: 300, firstSeenAt: 400 });
+    const t3 = track(3, { fileModifiedAt: 150, firstSeenAt: 600 });
+    const book = groupMultiFileAudiobooks([t1, t2, t3])[0];
+    expect(book.fileModifiedAt).toBe(300);
+    expect(book.firstSeenAt).toBe(400);
   });
 });
 

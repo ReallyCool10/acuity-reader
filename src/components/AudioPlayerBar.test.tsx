@@ -12,7 +12,9 @@ const mockItem: MediaItem = {
   mediaType: 'audio',
   format: 'm4b',
   fileSize: 10485760,
-  dateAdded: Date.now(),
+  fileModifiedAt: 100,
+  firstSeenAt: 100,
+  dateAdded: 100,
   dirName: 'C:/Audio',
   durationSeconds: 3600,
 };
@@ -471,7 +473,9 @@ describe('AudioPlayerBar', () => {
       mediaType: 'audio',
       format: 'mp3',
       fileSize: 50000000,
-      dateAdded: Date.now(),
+      fileModifiedAt: 100,
+      firstSeenAt: 100,
+      dateAdded: 100,
       dirName: 'The Hobbit',
       durationSeconds: 1800,
       tracks: [

@@ -21,6 +21,7 @@ import * as mm from 'music-metadata';
 import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
 import { computeStableId, migrateLibraryState } from './id';
+import { isCacheHit } from './scanCache';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
@@ -594,7 +595,9 @@ interface ScannedItem {
   mediaType: 'audio' | 'book';
   format: string;
   fileSize: number;
-  dateAdded: number;
+  fileModifiedAt: number;
+  firstSeenAt?: number;
+  dateAdded?: number;
   dirName: string;
   durationSeconds?: number;
   companionPath?: string;
@@ -636,23 +639,12 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       const stats = await fs.promises.stat(fullPath);
 
       // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
-      // Invalidate if the cached item contains a corrupted shadow-library title or a generic folder cover.
       const cached = itemMetadataCache.get(fullPath);
-      const hasCorruptedTitle =
-        cached?.title && /(?:zblibrary|z-lib|1lib|libgen|\.sk\b|etc\.\))/i.test(cached.title);
-      const hasGenericCover =
-        cached?.coverUrl && /(?:cover|folder|front|albumart)\.(?:jpe?g|png|webp)$/i.test(cached.coverUrl);
-
-      if (
-        cached &&
-        !hasCorruptedTitle &&
-        !hasGenericCover &&
-        cached.fileSize === stats.size &&
-        Math.abs(cached.dateAdded - stats.mtimeMs) < 1000
-      ) {
+      if (isCacheHit(cached, stats)) {
         items.push({
-          ...cached,
-          dateAdded: stats.mtimeMs,
+          ...cached!,
+          fileModifiedAt: stats.mtimeMs,
+          dateAdded: cached!.dateAdded ?? stats.mtimeMs,
         });
         onProgress(items.length);
         continue;
@@ -727,6 +719,7 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         mediaType,
         format: ext.replace('.', ''),
         fileSize: stats.size,
+        fileModifiedAt: stats.mtimeMs,
         dateAdded: stats.mtimeMs,
         dirName: parentDirName,
         durationSeconds,
@@ -811,8 +804,8 @@ ipcMain.handle('storage:load', async () => {
     const filePath = getStorageFilePath();
     if (fs.existsSync(filePath)) {
       const parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8'));
-      const { state: migrated, migratedCount } = migrateLibraryState(parsed);
-      let libraryModified = migratedCount > 0;
+      const { state: migrated, migratedCount, changed } = migrateLibraryState(parsed);
+      let libraryModified = migratedCount > 0 || Boolean(changed);
 
       // 1. Sanitize titles for any items with shadow library markers or malformed endings
       for (const item of (migrated.items || []) as ScannedItem[]) {

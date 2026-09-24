@@ -29,7 +29,12 @@ export interface MediaItem {
   mediaType: MediaType;
   format: string;
   fileSize: number;
-  dateAdded: number;
+  /** Filesystem modification time (ms) used for fast cache hit checks on rescan. */
+  fileModifiedAt: number;
+  /** Timestamp (ms) when the item was first discovered or added to the library. */
+  firstSeenAt: number;
+  /** @deprecated Kept for migration backwards-compatibility; corresponds to firstSeenAt */
+  dateAdded?: number;
   dirName: string;
   /** Present for audio when the tag reader could determine a duration. */
   durationSeconds?: number;

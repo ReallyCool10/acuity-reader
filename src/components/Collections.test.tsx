@@ -17,7 +17,9 @@ function makeMockMediaItem(overrides: Partial<MediaItem> = {}): MediaItem {
     mediaType: 'book',
     format: 'epub',
     fileSize: 1024,
-    dateAdded: Date.now(),
+    fileModifiedAt: 100,
+    firstSeenAt: 100,
+    dateAdded: 100,
     dirName: 'books',
     ...overrides,
   };

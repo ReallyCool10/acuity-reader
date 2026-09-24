@@ -26,6 +26,7 @@ import {
   type SeriesSuggestion,
 } from './lib/collections';
 import {
+  carryForwardFirstSeenAt,
   carryForwardLegacyIds,
   groupMultiFileAudiobooks,
   migrateLegacyItemIds,
@@ -154,14 +155,17 @@ export default function App() {
         const grouped = groupMultiFileAudiobooks(deduped);
 
         // Re-identified items must take their progress, bookmarks and
-        // collection memberships with them.
+        // collection memberships with them, and preserve original addition date.
         updateLibrary(
-          (prev) =>
-            migrateLegacyItemIds({
+          (prev) => {
+            const withLegacy = carryForwardLegacyIds(prev.items, grouped);
+            const withDates = carryForwardFirstSeenAt(prev.items, withLegacy);
+            return migrateLegacyItemIds({
               ...prev,
               folders: foldersToScan,
-              items: carryForwardLegacyIds(prev.items, grouped),
-            }).state
+              items: withDates,
+            }).state;
+          }
         );
       } catch (err) {
         console.error('Library scan failed:', err);
@@ -179,13 +183,19 @@ export default function App() {
       if (!saved || !Array.isArray(saved.items)) return;
 
       const grouped = groupMultiFileAudiobooks(saved.items);
-      const { state, changed } = migrateLegacyItemIds({ ...EMPTY_LIBRARY, ...saved, items: grouped });
+      const withDates = carryForwardFirstSeenAt(saved.items, grouped);
+      const { state, changed } = migrateLegacyItemIds({ ...EMPTY_LIBRARY, ...saved, items: withDates });
       setLibrary(state);
 
-      // Persist when IDs moved, so the store - which the MCP server reads
+      // Persist when IDs moved or dates migrated, so the store - which the MCP server reads
       // directly - agrees with what the UI shows.
       const idsChanged = grouped.some((item, index) => item.id !== saved.items[index]?.id);
-      if (changed || idsChanged) void window.electronAPI?.saveLibrary(state);
+      const datesChanged = withDates.some(
+        (item, index) =>
+          item.fileModifiedAt !== saved.items[index]?.fileModifiedAt ||
+          item.firstSeenAt !== saved.items[index]?.firstSeenAt
+      );
+      if (changed || idsChanged || datesChanged) void window.electronAPI?.saveLibrary(state);
 
       // Initial scan if folders are configured but library items are empty.
       if (saved.folders?.length && saved.items.length === 0) {
@@ -410,7 +420,7 @@ export default function App() {
         case 'author':
           return collator.compare(a.author, b.author) || collator.compare(a.title, b.title);
         case 'added':
-          return b.dateAdded - a.dateAdded;
+          return (b.firstSeenAt ?? b.dateAdded ?? 0) - (a.firstSeenAt ?? a.dateAdded ?? 0);
         case 'recent':
         default: {
           // Unplayed titles sort after everything that has been opened.
