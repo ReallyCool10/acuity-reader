@@ -56,6 +56,13 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     transmit the text being narrated to a Microsoft endpoint; the system voice does not. Any
     change to engine selection, defaults or fallback must keep the disclosure in the reader's
     voice picker and the Privacy section of `README.md` accurate.
+11. **Item IDs must not depend on anything that routinely changes.** Progress, bookmarks and
+    collection members are all keyed by item ID, so an ID change orphans all three silently.
+    Multi-file audiobook IDs (`computeAudiobookGroupId`) are derived from the raw album tag or
+    folder plus author - never the track list or the cleaned display title. If an ID scheme must
+    change, record the old ID in `legacyIds` so `migrateLegacyItemIds` can move the references.
+12. **`ProgressItem.percent` is 0-100 everywhere.** The Continue shelf only shows items above 1,
+    so a value on a 0-1 scale silently hides the books a user is part-way through.
 
 ## UI conventions
 

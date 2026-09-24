@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateSecMsGec, DEFAULT_EDGE_VOICES, TRUSTED_CLIENT_TOKEN } from './edgeTts';
+import { generateSecMsGec, DEFAULT_EDGE_VOICES, TRUSTED_CLIENT_TOKEN, escapeXml } from './edgeTts';
 
 describe('electron/edgeTts', () => {
   describe('generateSecMsGec', () => {
@@ -46,5 +46,25 @@ describe('electron/edgeTts', () => {
         expect(['Female', 'Male']).toContain(v.gender);
       }
     });
+  });
+});
+
+describe('escapeXml', () => {
+  it('replaces control characters XML 1.0 forbids, so the SSML stays well-formed', () => {
+    expect(escapeXml('a\u0000b\u0008c\u000Bd\u000Ce\u001Ff')).toBe('a b c d e f');
+  });
+
+  it('keeps the whitespace controls XML allows', () => {
+    expect(escapeXml('a\tb\nc\rd')).toBe('a\tb\nc\rd');
+  });
+
+  it('escapes markup characters', () => {
+    expect(escapeXml(`<p a="1">Tom & Jerry's</p>`)).toBe(
+      '&lt;p a=&quot;1&quot;&gt;Tom &amp; Jerry&apos;s&lt;/p&gt;'
+    );
+  });
+
+  it('leaves non-ASCII text intact', () => {
+    expect(escapeXml('naïve café — 日本語 😀')).toBe('naïve café — 日本語 😀');
   });
 });

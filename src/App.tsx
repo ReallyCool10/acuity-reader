@@ -25,7 +25,12 @@ import {
   getUnresolvedMemberCount,
   type SeriesSuggestion,
 } from './lib/collections';
-import { groupMultiFileAudiobooks, resolveAudiobookProgress } from './lib/audiobookGrouping';
+import {
+  carryForwardLegacyIds,
+  groupMultiFileAudiobooks,
+  migrateLegacyItemIds,
+  resolveAudiobookProgress,
+} from './lib/audiobookGrouping';
 import type { AppTheme, Bookmark, Collection, CollectionKind, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
 const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
@@ -148,7 +153,16 @@ export default function App() {
         const deduped = Array.from(new Map(scanned.map((item) => [item.filePath, item])).values());
         const grouped = groupMultiFileAudiobooks(deduped);
 
-        updateLibrary((prev) => ({ ...prev, folders: foldersToScan, items: grouped }));
+        // Re-identified items must take their progress, bookmarks and
+        // collection memberships with them.
+        updateLibrary(
+          (prev) =>
+            migrateLegacyItemIds({
+              ...prev,
+              folders: foldersToScan,
+              items: carryForwardLegacyIds(prev.items, grouped),
+            }).state
+        );
       } catch (err) {
         console.error('Library scan failed:', err);
       } finally {
@@ -165,7 +179,13 @@ export default function App() {
       if (!saved || !Array.isArray(saved.items)) return;
 
       const grouped = groupMultiFileAudiobooks(saved.items);
-      setLibrary({ ...EMPTY_LIBRARY, ...saved, items: grouped });
+      const { state, changed } = migrateLegacyItemIds({ ...EMPTY_LIBRARY, ...saved, items: grouped });
+      setLibrary(state);
+
+      // Persist when IDs moved, so the store - which the MCP server reads
+      // directly - agrees with what the UI shows.
+      const idsChanged = grouped.some((item, index) => item.id !== saved.items[index]?.id);
+      if (changed || idsChanged) void window.electronAPI?.saveLibrary(state);
 
       // Initial scan if folders are configured but library items are empty.
       if (saved.folders?.length && saved.items.length === 0) {
@@ -819,6 +839,8 @@ export default function App() {
       />
 
       <CollectionModal
+        // Remount per open so the form re-seeds from the collection being edited.
+        key={isCollectionModalOpen ? (editingCollection?.id ?? 'new') : 'closed'}
         isOpen={isCollectionModalOpen}
         collection={editingCollection}
         onClose={() => {
