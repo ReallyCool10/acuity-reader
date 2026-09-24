@@ -6,7 +6,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AcuityLogo } from './AcuityLogo';
 import {
   ACUITY_LOGO_VIEWBOX,
-  ACUITY_LOGO_GRADIENT,
+  ACUITY_LOGO_BASE_GRADIENT,
+  ACUITY_LOGO_TOP_GRADIENT,
   ACUITY_LOGO_PATH,
 } from './acuityLogoConstants';
 
@@ -35,17 +36,17 @@ describe('AcuityLogo and Favicon SVG Synchronization', () => {
     expect(svg?.getAttribute('viewBox')).toBe(ACUITY_LOGO_VIEWBOX);
     expect(svg?.getAttribute('aria-label')).toBe('Acuity Logo');
 
-    const pathElem = svg?.querySelector('path');
-    expect(pathElem).not.toBeNull();
-    expect(pathElem?.getAttribute('d')).toBe(ACUITY_LOGO_PATH);
+    const paths = Array.from(svg?.querySelectorAll('path') || []);
+    expect(paths.length).toBe(2);
+    paths.forEach((pathElem) => {
+      expect(pathElem.getAttribute('d')).toBe(ACUITY_LOGO_PATH);
+    });
 
     // Verify gradient stops
     const stops = Array.from(svg?.querySelectorAll('stop') || []);
-    expect(stops.length).toBe(ACUITY_LOGO_GRADIENT.stops.length);
-    stops.forEach((stop, idx) => {
-      expect(stop.getAttribute('offset')).toBe(ACUITY_LOGO_GRADIENT.stops[idx].offset);
-      expect(stop.getAttribute('stop-color')).toBe(ACUITY_LOGO_GRADIENT.stops[idx].color);
-    });
+    const expectedTotalStops =
+      ACUITY_LOGO_BASE_GRADIENT.stops.length + ACUITY_LOGO_TOP_GRADIENT.stops.length;
+    expect(stops.length).toBe(expectedTotalStops);
 
     await act(async () => {
       root.unmount();
@@ -80,8 +81,14 @@ describe('AcuityLogo and Favicon SVG Synchronization', () => {
     // Must match the exact viewBox
     expect(svgContent).toContain(`viewBox="${ACUITY_LOGO_VIEWBOX}"`);
 
-    // Must match all gradient color stops
-    ACUITY_LOGO_GRADIENT.stops.forEach((stop) => {
+    // Must match base gradient color stops
+    ACUITY_LOGO_BASE_GRADIENT.stops.forEach((stop) => {
+      expect(svgContent).toContain(`offset="${stop.offset}"`);
+      expect(svgContent).toContain(`stop-color="${stop.color}"`);
+    });
+
+    // Must match top gradient color stops
+    ACUITY_LOGO_TOP_GRADIENT.stops.forEach((stop) => {
       expect(svgContent).toContain(`offset="${stop.offset}"`);
       expect(svgContent).toContain(`stop-color="${stop.color}"`);
     });

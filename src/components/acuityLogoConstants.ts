@@ -6,16 +6,29 @@
 
 export const ACUITY_LOGO_VIEWBOX = '0 0 100 100';
 
-export const ACUITY_LOGO_GRADIENT = {
-  id: 'acuityGrad',
-  x1: '10%',
-  y1: '10%',
-  x2: '90%',
-  y2: '90%',
+export const ACUITY_LOGO_BASE_GRADIENT = {
+  id: 'acuityGradBase',
+  x1: '5%',
+  y1: '60%',
+  x2: '95%',
+  y2: '85%',
   stops: [
-    { offset: '0%', color: '#ffd8a8' },   // Light Orange Yellow
-    { offset: '35%', color: '#fef08a' },  // Warm Solar Yellow
-    { offset: '100%', color: '#93c5fd' }, // Soft Sky Blue
+    { offset: '0%', color: '#f59e0b' },   // Left: Warm Golden Honey
+    { offset: '50%', color: '#fbbf24' },  // Left-to-center: Radiant Gold
+    { offset: '100%', color: '#1d4ed8' }, // Bottom-Right: Deep Royal Cobalt Blue
+  ],
+} as const;
+
+export const ACUITY_LOGO_TOP_GRADIENT = {
+  id: 'acuityGradTop',
+  x1: '50%',
+  y1: '0%',
+  x2: '50%',
+  y2: '75%',
+  stops: [
+    { offset: '0%', color: '#ea580c', opacity: 1 },    // Top: Vibrant Sunset Orange-Red
+    { offset: '40%', color: '#f97316', opacity: 0.85 }, // Warm Amber Blend
+    { offset: '75%', color: '#ea580c', opacity: 0 },    // Transparent Fade
   ],
 } as const;
 

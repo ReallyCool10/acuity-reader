@@ -1,7 +1,8 @@
 import React, { useId } from 'react';
 import {
   ACUITY_LOGO_VIEWBOX,
-  ACUITY_LOGO_GRADIENT,
+  ACUITY_LOGO_BASE_GRADIENT,
+  ACUITY_LOGO_TOP_GRADIENT,
   ACUITY_LOGO_PATH,
 } from './acuityLogoConstants';
 
@@ -12,7 +13,9 @@ interface AcuityLogoProps {
 
 export const AcuityLogo: React.FC<AcuityLogoProps> = ({ size = 24, className = '' }) => {
   const rawId = useId();
-  const gradId = `acuityGrad-${rawId.replace(/:/g, '')}`;
+  const cleanId = rawId.replace(/:/g, '');
+  const baseGradId = `acuityGradBase-${cleanId}`;
+  const topGradId = `acuityGradTop-${cleanId}`;
 
   return (
     <svg
@@ -26,18 +29,35 @@ export const AcuityLogo: React.FC<AcuityLogoProps> = ({ size = 24, className = '
     >
       <defs>
         <linearGradient
-          id={gradId}
-          x1={ACUITY_LOGO_GRADIENT.x1}
-          y1={ACUITY_LOGO_GRADIENT.y1}
-          x2={ACUITY_LOGO_GRADIENT.x2}
-          y2={ACUITY_LOGO_GRADIENT.y2}
+          id={baseGradId}
+          x1={ACUITY_LOGO_BASE_GRADIENT.x1}
+          y1={ACUITY_LOGO_BASE_GRADIENT.y1}
+          x2={ACUITY_LOGO_BASE_GRADIENT.x2}
+          y2={ACUITY_LOGO_BASE_GRADIENT.y2}
         >
-          {ACUITY_LOGO_GRADIENT.stops.map((stop) => (
+          {ACUITY_LOGO_BASE_GRADIENT.stops.map((stop) => (
             <stop key={stop.offset} offset={stop.offset} stopColor={stop.color} />
           ))}
         </linearGradient>
+        <linearGradient
+          id={topGradId}
+          x1={ACUITY_LOGO_TOP_GRADIENT.x1}
+          y1={ACUITY_LOGO_TOP_GRADIENT.y1}
+          x2={ACUITY_LOGO_TOP_GRADIENT.x2}
+          y2={ACUITY_LOGO_TOP_GRADIENT.y2}
+        >
+          {ACUITY_LOGO_TOP_GRADIENT.stops.map((stop) => (
+            <stop
+              key={stop.offset}
+              offset={stop.offset}
+              stopColor={stop.color}
+              stopOpacity={stop.opacity ?? 1}
+            />
+          ))}
+        </linearGradient>
       </defs>
-      <path d={ACUITY_LOGO_PATH} fill={`url(#${gradId})`} />
+      <path d={ACUITY_LOGO_PATH} fill={`url(#${baseGradId})`} />
+      <path d={ACUITY_LOGO_PATH} fill={`url(#${topGradId})`} />
     </svg>
   );
 };
