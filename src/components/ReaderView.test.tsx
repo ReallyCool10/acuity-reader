@@ -37,16 +37,27 @@ describe('ReaderView (EPUB)', () => {
     localStorage.clear();
     container = document.createElement('div');
     document.body.appendChild(container);
+
+    class MockAudio {
+      src = '';
+      playbackRate = 1;
+      play = vi.fn().mockResolvedValue(undefined);
+      pause = vi.fn();
+    }
+    vi.stubGlobal('Audio', MockAudio);
+
     window.electronAPI = {
       readBytes: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
       getEdgeVoices: vi.fn().mockResolvedValue([
         { name: 'en-US-JennyNeural', friendlyName: 'Microsoft Jenny Online (Natural)', locale: 'en-US', gender: 'Female' },
         { name: 'en-US-GuyNeural', friendlyName: 'Microsoft Guy Online (Natural)', locale: 'en-US', gender: 'Male' },
       ]),
+      synthesizeEdge: vi.fn().mockReturnValue(new Promise(() => {})),
     } as unknown as typeof window.electronAPI;
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     container.remove();
     delete window.electronAPI;
   });
@@ -60,6 +71,8 @@ describe('ReaderView (EPUB)', () => {
     filePath: 'C:/Books/pride.epub',
     dirName: 'C:/Books',
     fileSize: 1024,
+    fileModifiedAt: 1000,
+    firstSeenAt: 1000,
     dateAdded: 1000,
   };
 
@@ -130,6 +143,57 @@ describe('ReaderView (EPUB)', () => {
       increaseFontBtn.click();
     });
     expect(Number(JSON.parse(localStorage.getItem('acuity.reader.fontSize') || '18'))).toBeGreaterThan(18);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('toggles narration play and stop and advances chapters via keyboard', async () => {
+    const onProgressUpdate = vi.fn();
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ReaderView
+          item={sampleBook}
+          onClose={vi.fn()}
+          onProgressUpdate={onProgressUpdate}
+          onAddBookmark={vi.fn()}
+        />
+      );
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Start narration button
+    const playNarrationBtn = container.querySelector('button[aria-label="Read aloud"]') as HTMLButtonElement;
+    expect(playNarrationBtn).toBeDefined();
+
+    await act(async () => {
+      playNarrationBtn.click();
+    });
+
+    // Button aria-label flips to stop reading aloud
+    const stopNarrationBtn = container.querySelector('button[aria-label="Stop reading aloud"]') as HTMLButtonElement;
+    expect(stopNarrationBtn).toBeDefined();
+
+    // Clicking stop narration
+    await act(async () => {
+      stopNarrationBtn.click();
+    });
+
+    expect(container.querySelector('button[aria-label="Read aloud"]')).toBeDefined();
+
+    // Navigate to chapter 2 via ArrowRight
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+    });
+
+    expect(container.textContent).toContain('Chapter 2');
+    expect(container.textContent).toContain('Mr. Bennet was among the earliest');
+    expect(onProgressUpdate).toHaveBeenCalledWith('b1', 1, expect.any(Number), 0);
 
     await act(async () => {
       root.unmount();

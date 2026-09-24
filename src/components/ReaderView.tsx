@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Play, Square, RotateCcw } from 'lucide-react';
-import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice, EdgeSynthesisResult } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice } from '../types';
 import { parseEpub, type EpubChapter } from '../lib/epub';
 import { PdfReaderView } from './PdfReaderView';
 import { canRenderInReader } from '../lib/media';
@@ -13,11 +13,10 @@ import {
   highlightSentence,
   sentenceBoundsAt,
   isHighlightSupported,
-  splitNarrationChunks,
-  base64ToBlobUrl,
   FALLBACK_VOICE_CHOICES,
   type NarrationMap,
 } from '../lib/narration';
+import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
@@ -75,9 +74,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
   const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
   const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
-  const narrationAudioRef = useRef<HTMLAudioElement | null>(null);
-  const narrationAbortRef = useRef<AbortController | null>(null);
-  const prefetchPromiseRef = useRef<Promise<EdgeSynthesisResult> | null>(null);
+  const engineRef = useRef<NarrationEngine | null>(null);
+  const chapterIndexRef = useRef(chapterIndex);
   const currentCharIndexRef = useRef<number>(0);
 
   useEffect(() => {
@@ -106,33 +104,35 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   } | null>(null);
   const articleRef = useRef<HTMLElement | null>(null);
 
+  /* ----------------------------------------------------------- progress */
+
+  /** Cumulative word position, so percentage reflects length rather than chapter count. */
+  const { wordOffsets, totalWords } = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const chapter of chapters) {
+      offsets.push(running);
+      running += chapter.words;
+    }
+    return { wordOffsets: offsets, totalWords: running };
+  }, [chapters]);
+
+  const percentFor = useCallback(
+    (index: number, scrollRatio: number) => {
+      if (totalWords === 0 || !chapters[index]) return 0;
+      const within = chapters[index].words * Math.min(1, Math.max(0, scrollRatio));
+      return Math.min(100, ((wordOffsets[index] + within) / totalWords) * 100);
+    },
+    [chapters, wordOffsets, totalWords]
+  );
+
   /* ---------------------------------------------------------- narration */
 
   const stopNarration = useCallback(() => {
-    if (narrationAbortRef.current) {
-      narrationAbortRef.current.abort();
-      narrationAbortRef.current = null;
-    }
-    prefetchPromiseRef.current = null;
-    if (narrationAudioRef.current) {
-      narrationAudioRef.current.pause();
-      narrationAudioRef.current.src = '';
-      narrationAudioRef.current.ontimeupdate = null;
-      narrationAudioRef.current.onended = null;
-      narrationAudioRef.current.onerror = null;
-    }
-    window.speechSynthesis?.cancel();
+    engineRef.current?.stop();
     clearHighlight();
-    setGlowRect((prev) => (prev ? { ...prev, opacity: 0 } : null));
-    setIsNarrating(false);
-  }, []);
-
-  // When chapter switches, reset narration position and glow
-  useEffect(() => {
-    currentCharIndexRef.current = 0;
     setGlowRect(null);
-    stopNarration();
-  }, [chapterIndex, stopNarration]);
+  }, []);
 
   const saveNarrationProgress = useCallback(
     (charIdx: number) => {
@@ -140,7 +140,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
         localStorage.setItem(
           `acuity.narrationProgress.${item.id}`,
           JSON.stringify({
-            chapterIndex,
+            chapterIndex: chapterIndexRef.current,
             charIndex: charIdx,
             updatedAt: Date.now(),
           })
@@ -149,7 +149,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
         // Ignore quota limits
       }
     },
-    [chapterIndex, item.id]
+    [item.id]
   );
 
   // Restore saved narration sentence progress for this book and chapter
@@ -166,6 +166,10 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       // Ignore
     }
   }, [chapterIndex, item.id]);
+
+  useEffect(() => {
+    chapterIndexRef.current = chapterIndex;
+  }, [chapterIndex]);
 
   const updateVisualHighlight = useCallback((currentMap: NarrationMap, globalCharIdx: number) => {
     const range = highlightSentence(currentMap, globalCharIdx);
@@ -192,227 +196,130 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     }
   }, []);
 
-  const fallbackLocalSpeech = useCallback(
-    (map: NarrationMap, fromCharIndex: number = 0, overrideRate?: number) => {
-      window.speechSynthesis?.cancel();
-      const bounds = sentenceBoundsAt(map.text, Math.max(0, fromCharIndex));
-      const startChar = fromCharIndex > 0 ? bounds.start : 0;
-      currentCharIndexRef.current = startChar;
-      saveNarrationProgress(startChar);
+  useEffect(() => {
+    const source: NarrationSource = {
+      getSection: async (sectionIdx: number) => {
+        if (sectionIdx < 0 || sectionIdx >= chapters.length) return null;
 
-      const textToSpeak = startChar > 0 ? map.text.slice(startChar) : map.text;
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
-      utterance.rate = overrideRate ?? narrationRate;
+        // If the DOM currently displays this chapter, build NarrationMap directly
+        if (chapterIndexRef.current === sectionIdx && proseRef.current) {
+          const map = buildNarrationMap(proseRef.current);
+          narrationMapRef.current = map;
+          if (map.text.trim()) {
+            return { text: map.text };
+          }
+        }
 
-      utterance.onboundary = (event) => {
-        const currentMap = narrationMapRef.current;
-        if (!currentMap) return;
-        const globalCharIdx = startChar + event.charIndex;
-        currentCharIndexRef.current = globalCharIdx;
-        saveNarrationProgress(globalCharIdx);
-        updateVisualHighlight(currentMap, globalCharIdx);
-      };
+        // Wait a frame for React to render the new chapter into proseRef if changing chapters
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        if (proseRef.current) {
+          const map = buildNarrationMap(proseRef.current);
+          narrationMapRef.current = map;
+          if (map.text.trim()) {
+            return { text: map.text };
+          }
+        }
 
-      utterance.onend = () => {
+        const fallback = chapters[sectionIdx]?.text || '';
+        return fallback.trim() ? { text: fallback } : null;
+      },
+      hasNextSection: (sectionIdx: number) => {
+        return sectionIdx < chapters.length - 1;
+      },
+      onSectionStart: (nextChapterIdx: number) => {
+        chapterIndexRef.current = nextChapterIdx;
+        setChapterIndex(nextChapterIdx);
+        currentCharIndexRef.current = 0;
+        setGlowRect(null);
         clearHighlight();
-        setGlowRect((prev) => (prev ? { ...prev, opacity: 0 } : null));
-        setIsNarrating(false);
-      };
-      utterance.onerror = () => {
-        clearHighlight();
-        setGlowRect((prev) => (prev ? { ...prev, opacity: 0 } : null));
-        setIsNarrating(false);
-      };
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = 0;
+        }
+        onProgressUpdate(item.id, nextChapterIdx, percentFor(nextChapterIdx, 0), 0);
+      },
+    };
 
-      setIsNarrating(true);
-      window.speechSynthesis?.speak(utterance);
-    },
-    [narrationRate, saveNarrationProgress, updateVisualHighlight]
-  );
+    if (!engineRef.current) {
+      engineRef.current = new NarrationEngine(source, {
+        onStateChange: (state) => {
+          setIsNarrating(state.isNarrating);
+          if (!state.isNarrating) {
+            clearHighlight();
+            setGlowRect(null);
+          }
+        },
+        onBoundary: (charIdx) => {
+          currentCharIndexRef.current = charIdx;
+          saveNarrationProgress(charIdx);
+          const map = narrationMapRef.current;
+          if (map) {
+            updateVisualHighlight(map, charIdx);
+          }
+        },
+        onSectionAdvance: (nextChapterIdx) => {
+          chapterIndexRef.current = nextChapterIdx;
+          setChapterIndex(nextChapterIdx);
+          currentCharIndexRef.current = 0;
+          setGlowRect(null);
+          clearHighlight();
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = 0;
+          }
+          onProgressUpdate(item.id, nextChapterIdx, percentFor(nextChapterIdx, 0), 0);
+        },
+      });
+    } else {
+      engineRef.current.setSource(source);
+    }
+  }, [chapters, item.id, onProgressUpdate, percentFor, saveNarrationProgress, updateVisualHighlight]);
+
+  useEffect(() => {
+    return () => {
+      engineRef.current?.destroy();
+      engineRef.current = null;
+    };
+  }, []);
 
   const startNarration = useCallback(
     (fromCharIndex: number = 0, overrideVoice?: string, overrideRate?: number) => {
+      if (!proseRef.current && (!chapters[chapterIndex] || !chapters[chapterIndex].text)) return;
+
       const container = proseRef.current;
-      if (!container) return;
-
-      const map = buildNarrationMap(container);
-      if (!map.text.trim()) return;
-      narrationMapRef.current = map;
-
-      stopNarration();
-
-      const activeVoice = overrideVoice ?? ttsVoice;
-      const activeRate = overrideRate ?? narrationRate;
-
-      const api = window.electronAPI;
-      const useEdge =
-        activeVoice !== LOCAL_VOICE_ID &&
-        api !== undefined &&
-        typeof api.synthesizeEdge === 'function';
-
-      const clampedFrom = Math.max(0, Math.min(fromCharIndex, map.text.length));
-      const sentenceBounds = sentenceBoundsAt(map.text, clampedFrom);
-      const startChar = clampedFrom > 0 ? sentenceBounds.start : 0;
-      currentCharIndexRef.current = startChar;
-      saveNarrationProgress(startChar);
-
-      // Pre-highlight sentence immediately on trigger
-      updateVisualHighlight(map, startChar);
-
-      if (useEdge && api) {
-        const abortController = new AbortController();
-        narrationAbortRef.current = abortController;
-        setIsNarrating(true);
-
-        const textToNarrate = startChar > 0 ? map.text.slice(startChar) : map.text;
-        const chunks = splitNarrationChunks(textToNarrate, 800, startChar);
-        if (chunks.length === 0) {
-          setIsNarrating(false);
-          return;
-        }
-
-        if (!narrationAudioRef.current) {
-          narrationAudioRef.current = new Audio();
-        }
-        const audio = narrationAudioRef.current;
-        audio.playbackRate = activeRate;
-        let currentBlobUrl: string | null = null;
-
-        const playChunkAt = async (index: number) => {
-          if (abortController.signal.aborted) return;
-          if (index >= chunks.length) {
-            stopNarration();
-            return;
-          }
-
-          const chunk = chunks[index];
-
-          try {
-            const synthesisResult = prefetchPromiseRef.current
-              ? await prefetchPromiseRef.current
-              : await api.synthesizeEdge({
-                  text: chunk.text,
-                  voice: activeVoice,
-                  rate: activeRate,
-                });
-            prefetchPromiseRef.current = null;
-
-            if (abortController.signal.aborted) return;
-
-            // Pre-fetch next chunk concurrently in background
-            if (index + 1 < chunks.length) {
-              prefetchPromiseRef.current = api.synthesizeEdge({
-                text: chunks[index + 1].text,
-                voice: activeVoice,
-                rate: activeRate,
-              });
-            }
-
-            // Pre-calculate sequential character offsets for each boundary within chunk.text
-            // Microsoft Edge TTS word and sentence boundaries appear in chronological order.
-            // A moving searchCursor prevents common repeating words (e.g. "the", "a") from resetting to index 0.
-            let searchCursor = 0;
-            const mappedBoundaries = synthesisResult.boundaries.map((b) => {
-              let charOffset = -1;
-              if (b.text) {
-                const foundIdx = chunk.text.indexOf(b.text, searchCursor);
-                if (foundIdx !== -1) {
-                  charOffset = foundIdx;
-                  searchCursor = foundIdx + b.text.length;
-                } else {
-                  charOffset = chunk.text.indexOf(b.text);
-                }
-              }
-              return { ...b, charOffset };
-            });
-
-            if (currentBlobUrl) {
-              URL.revokeObjectURL(currentBlobUrl);
-            }
-            currentBlobUrl = base64ToBlobUrl(synthesisResult.audioBase64, synthesisResult.mimeType);
-            audio.src = currentBlobUrl;
-            audio.playbackRate = activeRate;
-
-            audio.ontimeupdate = () => {
-              if (abortController.signal.aborted) return;
-              const currentMap = narrationMapRef.current;
-              if (!currentMap) return;
-
-              const timeMs = audio.currentTime * 1000;
-              let active = mappedBoundaries.find(
-                (b) => timeMs >= b.offsetMs && timeMs < b.offsetMs + b.durationMs
-              );
-              if (!active) {
-                for (let i = mappedBoundaries.length - 1; i >= 0; i--) {
-                  if (timeMs >= mappedBoundaries[i].offsetMs) {
-                    active = mappedBoundaries[i];
-                    break;
-                  }
-                }
-              }
-
-              if (active && active.charOffset !== -1) {
-                const globalCharIdx = chunk.startChar + active.charOffset;
-                currentCharIndexRef.current = globalCharIdx;
-                saveNarrationProgress(globalCharIdx);
-                updateVisualHighlight(currentMap, globalCharIdx);
-              }
-            };
-
-            audio.onended = () => {
-              if (currentBlobUrl) {
-                URL.revokeObjectURL(currentBlobUrl);
-                currentBlobUrl = null;
-              }
-              void playChunkAt(index + 1);
-            };
-
-            audio.onerror = () => {
-              if (currentBlobUrl) {
-                URL.revokeObjectURL(currentBlobUrl);
-                currentBlobUrl = null;
-              }
-              console.warn('Edge TTS playback failed, falling back to local speech');
-              fallbackLocalSpeech(map, startChar, activeRate);
-            };
-
-            await audio.play();
-          } catch (err) {
-            if (abortController.signal.aborted) return;
-            console.warn('Edge TTS synthesis failed, falling back to local speech:', err);
-            fallbackLocalSpeech(map, startChar, activeRate);
-          }
-        };
-
-        void playChunkAt(0);
-        return;
+      if (container) {
+        const map = buildNarrationMap(container);
+        narrationMapRef.current = map;
+        const clampedFrom = Math.max(0, Math.min(fromCharIndex, map.text.length));
+        const sentenceBounds = sentenceBoundsAt(map.text, clampedFrom);
+        const startChar = clampedFrom > 0 ? sentenceBounds.start : 0;
+        currentCharIndexRef.current = startChar;
+        saveNarrationProgress(startChar);
+        updateVisualHighlight(map, startChar);
       }
 
-      fallbackLocalSpeech(map, startChar, activeRate);
+      void engineRef.current?.start({
+        sectionIndex: chapterIndex,
+        charOffset: fromCharIndex,
+        voice: overrideVoice ?? ttsVoice,
+        rate: overrideRate ?? narrationRate,
+      });
     },
-    [fallbackLocalSpeech, narrationRate, saveNarrationProgress, stopNarration, ttsVoice, updateVisualHighlight]
+    [chapterIndex, chapters, narrationRate, saveNarrationProgress, ttsVoice, updateVisualHighlight]
   );
 
   const handleVoiceChange = useCallback(
     (newVoice: string) => {
       setTtsVoice(newVoice);
-      if (isNarrating) {
-        // Hot-swap voice seamlessly resuming at the current active sentence
-        const resumeAt = currentCharIndexRef.current;
-        startNarration(resumeAt, newVoice);
-      }
+      engineRef.current?.setVoice(newVoice);
     },
-    [isNarrating, setTtsVoice, startNarration]
+    [setTtsVoice]
   );
 
   const handleRateChange = useCallback(
     (newRate: number) => {
       setNarrationRate(newRate);
-      if (narrationAudioRef.current && isNarrating) {
-        narrationAudioRef.current.playbackRate = newRate;
-      }
+      engineRef.current?.setRate(newRate);
     },
-    [isNarrating, setNarrationRate]
+    [setNarrationRate]
   );
 
   const toggleNarration = useCallback(() => {
@@ -551,27 +458,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     };
   }, [item, stopNarration]);
 
-  /* ----------------------------------------------------------- progress */
-
-  /** Cumulative word position, so percentage reflects length rather than chapter count. */
-  const { wordOffsets, totalWords } = useMemo(() => {
-    const offsets: number[] = [];
-    let running = 0;
-    for (const chapter of chapters) {
-      offsets.push(running);
-      running += chapter.words;
-    }
-    return { wordOffsets: offsets, totalWords: running };
-  }, [chapters]);
-
-  const percentFor = useCallback(
-    (index: number, scrollRatio: number) => {
-      if (totalWords === 0 || !chapters[index]) return 0;
-      const within = chapters[index].words * Math.min(1, Math.max(0, scrollRatio));
-      return Math.min(100, ((wordOffsets[index] + within) / totalWords) * 100);
-    },
-    [chapters, wordOffsets, totalWords]
-  );
+  /* ----------------------------------------------------------- scroll progress */
 
   const persistProgress = useThrottledCallback(
     (index: number, scrollTop: number, ratio: number) => {
@@ -608,17 +495,15 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     return () => cancelAnimationFrame(frame);
   }, [chapterIndex, status]);
 
-  /* Moving chapters ends narration */
-  useEffect(() => {
-    stopNarration();
-  }, [chapterIndex, stopNarration]);
-
   /* --------------------------------------------------- chapter navigation */
 
   const goToChapter = useCallback(
     (index: number) => {
       if (index < 0 || index >= chapters.length) return;
       stopNarration();
+      currentCharIndexRef.current = 0;
+      setGlowRect(null);
+      chapterIndexRef.current = index;
       setChapterIndex(index);
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
       onProgressUpdate(item.id, index, percentFor(index, 0), 0);

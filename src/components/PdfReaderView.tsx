@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Square, RotateCcw } from 'lucide-react';
-import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice, EdgeSynthesisResult } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice } from '../types';
 import {
   extractPdfPageText,
   getPdfInfo,
@@ -10,7 +10,8 @@ import {
 } from '../lib/pdf';
 import type * as pdfjsLib from 'pdfjs-dist';
 import { searchInText, type SearchResultItem } from '../lib/search';
-import { splitNarrationChunks, base64ToBlobUrl, FALLBACK_VOICE_CHOICES } from '../lib/narration';
+import { FALLBACK_VOICE_CHOICES } from '../lib/narration';
+import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
@@ -81,10 +82,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
   const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
 
-  const narrationAudioRef = useRef<HTMLAudioElement | null>(null);
-  const narrationAbortRef = useRef<AbortController | null>(null);
-  const prefetchPromiseRef = useRef<Promise<EdgeSynthesisResult> | null>(null);
   const narratingPageRef = useRef<number>(1);
+  const engineRef = useRef<NarrationEngine | null>(null);
 
   useEffect(() => {
     if (window.electronAPI?.getEdgeVoices) {
@@ -376,30 +375,6 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   /* ------------------------------------------------------------ narration */
 
-  const stopNarration = useCallback(() => {
-    if (narrationAbortRef.current) {
-      narrationAbortRef.current.abort();
-      narrationAbortRef.current = null;
-    }
-    prefetchPromiseRef.current = null;
-    if (narrationAudioRef.current) {
-      narrationAudioRef.current.pause();
-      narrationAudioRef.current.src = '';
-      narrationAudioRef.current.ontimeupdate = null;
-      narrationAudioRef.current.onended = null;
-      narrationAudioRef.current.onerror = null;
-    }
-    window.speechSynthesis?.cancel();
-    setNarratingPage(null);
-    setIsNarrating(false);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      stopNarration();
-    };
-  }, [stopNarration]);
-
   const getPageText = useCallback(
     async (pageNum: number): Promise<string> => {
       if (pageTextCacheRef.current.has(pageNum)) {
@@ -419,195 +394,84 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     [pdfDoc]
   );
 
-  /*
-   * Indirection to break a cycle between the two narration callbacks:
-   * fallbackLocalPdfSpeech advances to the next page via startNarration, while
-   * startNarration falls back to fallbackLocalPdfSpeech when the online voice
-   * fails. Referencing the later-declared callback directly worked only by
-   * accident of call timing, and forced an eslint-disable that also hid the
-   * genuine missing dependency. Routing one side through a ref removes both.
-   */
-  const startNarrationRef = useRef<
-    ((fromPage?: number, overrideVoice?: string, overrideRate?: number) => void) | null
-  >(null);
+  const stopNarration = useCallback(() => {
+    engineRef.current?.stop();
+  }, []);
 
-  const fallbackLocalPdfSpeech = useCallback(
-    (textToSpeak: string, pageNum: number, overrideRate?: number) => {
-      window.speechSynthesis?.cancel();
-      const utterance = new SpeechSynthesisUtterance(textToSpeak);
-      utterance.rate = overrideRate ?? narrationRate;
+  useEffect(() => {
+    const source: NarrationSource = {
+      getSection: async (pageNum: number) => {
+        const text = await getPageText(pageNum);
+        return text ? { text } : null;
+      },
+      hasNextSection: (pageNum: number) => {
+        return pdfInfo !== null && pageNum < pdfInfo.numPages;
+      },
+      onSectionStart: (pageNum: number) => {
+        narratingPageRef.current = pageNum;
+        setNarratingPage(pageNum);
+        scrollToPage(pageNum);
+      },
+    };
 
-      utterance.onend = () => {
-        if (pdfInfo && pageNum < pdfInfo.numPages) {
-          startNarrationRef.current?.(pageNum + 1, LOCAL_VOICE_ID, overrideRate);
-        } else {
-          stopNarration();
-        }
-      };
+    if (!engineRef.current) {
+      engineRef.current = new NarrationEngine(source, {
+        onStateChange: (state) => {
+          setIsNarrating(state.isNarrating);
+          if (!state.isNarrating) {
+            setNarratingPage(null);
+          }
+        },
+        onSectionAdvance: (nextPage) => {
+          narratingPageRef.current = nextPage;
+          setNarratingPage(nextPage);
+          scrollToPage(nextPage);
+        },
+      });
+    } else {
+      engineRef.current.setSource(source);
+    }
+  }, [getPageText, pdfInfo, scrollToPage]);
 
-      utterance.onerror = () => {
-        stopNarration();
-      };
-
-      setIsNarrating(true);
-      window.speechSynthesis?.speak(utterance);
-    },
-    [narrationRate, pdfInfo, stopNarration]
-  );
+  useEffect(() => {
+    return () => {
+      engineRef.current?.destroy();
+      engineRef.current = null;
+    };
+  }, []);
 
   const startNarration = useCallback(
-    async (fromPage: number = currentPage, overrideVoice?: string, overrideRate?: number) => {
+    (fromPage: number = currentPage, overrideVoice?: string, overrideRate?: number) => {
       if (!pdfDoc || !pdfInfo) return;
       if (fromPage < 1 || fromPage > pdfInfo.numPages) {
         stopNarration();
         return;
       }
-
-      stopNarration();
-
       narratingPageRef.current = fromPage;
       setNarratingPage(fromPage);
-      scrollToPage(fromPage);
-
-      const pageText = await getPageText(fromPage);
-      if (!pageText) {
-        // Page has no extractable text (e.g. image-only); auto-advance to next page
-        if (fromPage < pdfInfo.numPages) {
-          startNarrationRef.current?.(fromPage + 1, overrideVoice, overrideRate);
-        } else {
-          stopNarration();
-        }
-        return;
-      }
-
-      const activeVoice = overrideVoice ?? ttsVoice;
-      const activeRate = overrideRate ?? narrationRate;
-      const api = window.electronAPI;
-      const useEdge =
-        activeVoice !== LOCAL_VOICE_ID &&
-        api !== undefined &&
-        typeof api.synthesizeEdge === 'function';
-
-      if (useEdge && api) {
-        const abortController = new AbortController();
-        narrationAbortRef.current = abortController;
-        setIsNarrating(true);
-
-        const chunks = splitNarrationChunks(pageText, 800, 0);
-        if (chunks.length === 0) {
-          if (fromPage < pdfInfo.numPages) {
-            startNarrationRef.current?.(fromPage + 1, activeVoice, activeRate);
-          } else {
-            stopNarration();
-          }
-          return;
-        }
-
-        if (!narrationAudioRef.current) {
-          narrationAudioRef.current = new Audio();
-        }
-        const audio = narrationAudioRef.current;
-        audio.playbackRate = activeRate;
-        let currentBlobUrl: string | null = null;
-
-        const playChunkAt = async (index: number) => {
-          if (abortController.signal.aborted) return;
-          if (index >= chunks.length) {
-            // Page finished! Advance to next page automatically
-            if (fromPage < pdfInfo.numPages) {
-              startNarrationRef.current?.(fromPage + 1, activeVoice, activeRate);
-            } else {
-              stopNarration();
-            }
-            return;
-          }
-
-          const chunk = chunks[index];
-
-          try {
-            const synthesisResult = prefetchPromiseRef.current
-              ? await prefetchPromiseRef.current
-              : await api.synthesizeEdge({
-                  text: chunk.text,
-                  voice: activeVoice,
-                  rate: activeRate,
-                });
-            prefetchPromiseRef.current = null;
-
-            if (abortController.signal.aborted) return;
-
-            // Pre-fetch next chunk concurrently in background
-            if (index + 1 < chunks.length) {
-              prefetchPromiseRef.current = api.synthesizeEdge({
-                text: chunks[index + 1].text,
-                voice: activeVoice,
-                rate: activeRate,
-              });
-            }
-
-            if (currentBlobUrl) {
-              URL.revokeObjectURL(currentBlobUrl);
-            }
-            currentBlobUrl = base64ToBlobUrl(synthesisResult.audioBase64, synthesisResult.mimeType);
-            audio.src = currentBlobUrl;
-            audio.playbackRate = activeRate;
-
-            audio.onended = () => {
-              if (currentBlobUrl) {
-                URL.revokeObjectURL(currentBlobUrl);
-                currentBlobUrl = null;
-              }
-              void playChunkAt(index + 1);
-            };
-
-            audio.onerror = () => {
-              if (currentBlobUrl) {
-                URL.revokeObjectURL(currentBlobUrl);
-                currentBlobUrl = null;
-              }
-              console.warn('Edge TTS playback failed in PDF, falling back to local speech');
-              fallbackLocalPdfSpeech(pageText, fromPage, activeRate);
-            };
-
-            await audio.play();
-          } catch (err) {
-            if (abortController.signal.aborted) return;
-            console.warn('Edge TTS synthesis failed in PDF, falling back to local speech:', err);
-            fallbackLocalPdfSpeech(pageText, fromPage, activeRate);
-          }
-        };
-
-        void playChunkAt(0);
-        return;
-      }
-
-      fallbackLocalPdfSpeech(pageText, fromPage, activeRate);
+      void engineRef.current?.start({
+        sectionIndex: fromPage,
+        voice: overrideVoice ?? ttsVoice,
+        rate: overrideRate ?? narrationRate,
+      });
     },
-    [currentPage, fallbackLocalPdfSpeech, getPageText, narrationRate, pdfDoc, pdfInfo, scrollToPage, stopNarration, ttsVoice]
+    [currentPage, narrationRate, pdfDoc, pdfInfo, stopNarration, ttsVoice]
   );
-
-  useEffect(() => {
-    startNarrationRef.current = startNarration;
-  }, [startNarration]);
 
   const handleVoiceChange = useCallback(
     (newVoice: string) => {
       setTtsVoice(newVoice);
-      if (isNarrating) {
-        startNarration(narratingPageRef.current, newVoice);
-      }
+      engineRef.current?.setVoice(newVoice);
     },
-    [isNarrating, setTtsVoice, startNarration]
+    [setTtsVoice]
   );
 
   const handleRateChange = useCallback(
     (newRate: number) => {
       setNarrationRate(newRate);
-      if (narrationAudioRef.current && isNarrating) {
-        narrationAudioRef.current.playbackRate = newRate;
-      }
+      engineRef.current?.setRate(newRate);
     },
-    [isNarrating, setNarrationRate]
+    [setNarrationRate]
   );
 
   const toggleNarration = useCallback(() => {

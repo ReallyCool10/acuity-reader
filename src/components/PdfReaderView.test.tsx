@@ -39,7 +39,9 @@ describe('PdfReaderView', () => {
     filePath: 'C:/Library/clean_architecture.pdf',
     mediaType: 'book',
     format: 'pdf',
-    dateAdded: Date.now(),
+    fileModifiedAt: 100,
+    firstSeenAt: 100,
+    dateAdded: 100,
     dirName: 'C:/Library',
     fileSize: 1048576,
   };
