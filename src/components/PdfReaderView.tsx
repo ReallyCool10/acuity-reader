@@ -52,6 +52,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
   const restoringRef = useRef(false);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
+  const pageCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const onMetadataUpdateRef = useRef(onMetadataUpdate);
   const itemRef = useRef(item);
   useEffect(() => {
@@ -117,13 +118,16 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       setStatus('loading');
       try {
         let doc: pdfjsLib.PDFDocumentProxy;
-        const bytes = await window.electronAPI?.readBytes(item.filePath);
-        if (bytes && bytes.byteLength > 0) {
-          doc = await loadPdfDocument(bytes);
-        } else {
-          // Fallback to streaming via custom acuity:// protocol
-          const url = `acuity://media/${encodeURIComponent(item.filePath)}`;
-          doc = await loadPdfDocument(url);
+        const streamUrl = `acuity://media/${encodeURIComponent(item.filePath)}`;
+        try {
+          doc = await loadPdfDocument(streamUrl);
+        } catch {
+          const bytes = await window.electronAPI?.readBytes(item.filePath);
+          if (bytes && bytes.byteLength > 0) {
+            doc = await loadPdfDocument(bytes);
+          } else {
+            throw new Error('Failed to load PDF document.');
+          }
         }
 
         if (cancelled) {
@@ -175,6 +179,16 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       const canvas = canvasRefs.current.get(pageNumber);
       if (!canvas) return;
 
+      const cacheKey = `${pageNumber}@${targetScale}`;
+      const cached = pageCacheRef.current.get(cacheKey);
+      if (cached && cached.width === canvas.width && cached.height === canvas.height) {
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(cached, 0, 0);
+          return;
+        }
+      }
+
       // Cancel any ongoing render task for this page
       const ongoing = renderTasksRef.current.get(pageNumber);
       if (ongoing) {
@@ -190,6 +204,24 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         const task = await renderPdfPage(page, canvas, targetScale);
         renderTasksRef.current.set(pageNumber, task);
         await task.promise;
+
+        // Cache the rendered page for instant 0ms restoration
+        try {
+          const offscreen = document.createElement('canvas');
+          offscreen.width = canvas.width;
+          offscreen.height = canvas.height;
+          const offCtx = offscreen.getContext('2d');
+          if (offCtx) {
+            offCtx.drawImage(canvas, 0, 0);
+            if (pageCacheRef.current.size >= 25) {
+              const oldestKey = pageCacheRef.current.keys().next().value;
+              if (oldestKey) pageCacheRef.current.delete(oldestKey);
+            }
+            pageCacheRef.current.set(cacheKey, offscreen);
+          }
+        } catch {
+          // Best-effort offscreen caching
+        }
       } catch (err: unknown) {
         if (err && typeof err === 'object' && 'name' in err && err.name !== 'RenderingCancelledException') {
           // Ignored normal cancellations
@@ -235,7 +267,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   /* ------------------------------------------------------------ virtual windowing geometry */
 
-  const RENDER_BUFFER = 2; // Render current page ± 2 pages to conserve memory
+  const BUFFER_BEHIND = 2; // Keep 2 pages behind in memory
+  const BUFFER_AHEAD = 5;  // Pre-load at least 5 pages ahead consistently
   const [pageAspect, setPageAspect] = useState<number>(1.414);
 
   useEffect(() => {
@@ -264,9 +297,9 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   useEffect(() => {
     if (!pdfDoc || status !== 'ready') return;
 
-    // Render only visible pages within buffer window around current page
-    const start = Math.max(1, currentPage - RENDER_BUFFER);
-    const end = Math.min(pdfDoc.numPages, currentPage + RENDER_BUFFER);
+    // Render visible pages and pre-render at least 5 pages forward
+    const start = Math.max(1, currentPage - BUFFER_BEHIND);
+    const end = Math.min(pdfDoc.numPages, currentPage + BUFFER_AHEAD);
     for (let p = start; p <= end; p++) {
       void renderSinglePage(p, effectiveScale);
     }
@@ -312,29 +345,21 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     if (restoringRef.current || !containerRef.current || !pdfDoc) return;
 
     const container = containerRef.current;
-    const containerTop = container.getBoundingClientRect().top;
     const numPages = pdfDoc.numPages;
+    const slotHeight = estimatedPageHeight + 24; // page height + gap-6 (24px)
 
-    let closestPage = currentPage;
-    let minDistance = Infinity;
+    // O(1) page calculation from scroll position with zero DOM layout queries
+    const calculatedPage = Math.max(
+      1,
+      Math.min(numPages, Math.floor((container.scrollTop + slotHeight * 0.3) / slotHeight) + 1)
+    );
 
-    for (let p = 1; p <= numPages; p++) {
-      const el = pageRefs.current.get(p);
-      if (!el) continue;
-      const rect = el.getBoundingClientRect();
-      const distance = Math.abs(rect.top - containerTop);
-      if (distance < minDistance) {
-        minDistance = distance;
-        closestPage = p;
-      }
+    if (calculatedPage !== currentPage) {
+      setCurrentPage(calculatedPage);
     }
 
-    if (closestPage !== currentPage) {
-      setCurrentPage(closestPage);
-    }
-
-    reportProgress(closestPage, numPages, container.scrollTop);
-  }, [currentPage, pdfDoc, reportProgress]);
+    reportProgress(calculatedPage, numPages, container.scrollTop);
+  }, [currentPage, estimatedPageHeight, pdfDoc, reportProgress]);
 
   /* ------------------------------------------------------------ page navigation */
 
@@ -797,8 +822,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
           <div className="flex flex-col items-center gap-6 pb-20">
             {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => {
               const isNearViewport =
-                pageNum >= currentPage - RENDER_BUFFER &&
-                pageNum <= currentPage + RENDER_BUFFER;
+                pageNum >= currentPage - BUFFER_BEHIND &&
+                pageNum <= currentPage + BUFFER_AHEAD;
 
               return (
                 <div
