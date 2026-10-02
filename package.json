@@ -6,6 +6,9 @@
   "author": "Mark Newman",
   "type": "module",
   "main": "dist-electron/main.js",
+  "engines": {
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
+  },
   "bin": {
     "acuity-mcp": "./dist-mcp/index.js"
   },

@@ -199,4 +199,58 @@ describe('ReaderView (EPUB)', () => {
       root.unmount();
     });
   });
+
+  it('narrates the next chapter when one finishes, not the previous one again', async () => {
+    // Audio that "finishes" shortly after playing, so the engine rolls into
+    // chapter 2. It used to read chapter 1 off the page a second time, because
+    // the chapter ref changed before React had rendered the new chapter.
+    class EndingAudio {
+      src = '';
+      playbackRate = 1;
+      currentTime = 0;
+      onended: (() => void) | null = null;
+      ontimeupdate = null;
+      onerror = null;
+      play = vi.fn().mockImplementation(() => {
+        setTimeout(() => this.onended?.(), 5);
+        return Promise.resolve();
+      });
+      pause = vi.fn();
+    }
+    vi.stubGlobal('Audio', EndingAudio);
+    const synthesizeEdge = vi
+      .fn()
+      .mockResolvedValue({ audioBase64: '', mimeType: 'audio/mpeg', boundaries: [] });
+    window.electronAPI = { ...window.electronAPI, synthesizeEdge } as typeof window.electronAPI;
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ReaderView item={sampleBook} onClose={vi.fn()} onProgressUpdate={vi.fn()} onAddBookmark={vi.fn()} />
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      (container.querySelector('button[aria-label="Read aloud"]') as HTMLButtonElement).click();
+    });
+    // Several short act() scopes rather than one long one: React holds back
+    // re-renders until an act() scope ends, and the reader correctly waits for
+    // chapter 2 to be on the page before narrating it.
+    for (let i = 0; i < 20; i++) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+    }
+
+    const narrated = synthesizeEdge.mock.calls.map((call) => call[0].text as string);
+    expect(narrated[0]).toContain('It is a truth universally acknowledged');
+    expect(narrated[1]).toContain('Mr. Bennet was among the earliest');
+    expect(container.textContent).toContain('Mr. Bennet was among the earliest');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

@@ -1,7 +1,15 @@
 import type { EdgeSynthesisResult } from '../types';
 import { base64ToBlobUrl, sentenceBoundsAt, splitNarrationChunks } from './narration';
+import { isOnlineVoice } from './tts';
 
-export const LOCAL_VOICE_ID = 'local:system';
+/*
+ * The engine deliberately has no voice-ID constant of its own. It once defined
+ * a second LOCAL_VOICE_ID ('local:system') that did not match the picker's
+ * ('system-local' in ./tts), so choosing the offline system voice was treated
+ * as an online voice and the narrated text was sent to Microsoft. Re-exported
+ * so existing imports keep resolving to the single source of truth.
+ */
+export { LOCAL_VOICE_ID } from './tts';
 
 export interface NarrationSection {
   text: string;
@@ -253,8 +261,9 @@ export class NarrationEngine {
       this.deps.synthesizeEdge ??
       (typeof window !== 'undefined' ? window.electronAPI?.synthesizeEdge : undefined);
 
+    // Privacy boundary: only an online voice may send text off the machine.
     const useEdge =
-      this.currentVoice !== LOCAL_VOICE_ID &&
+      isOnlineVoice(this.currentVoice) &&
       apiSynthesize !== undefined &&
       typeof apiSynthesize === 'function';
 
