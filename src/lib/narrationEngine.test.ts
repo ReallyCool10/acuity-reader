@@ -8,6 +8,7 @@ import {
   type NarrationEngineDependencies,
 } from './narrationEngine';
 import type { EdgeSynthesisResult } from '../types';
+import { LOCAL_VOICE_ID as PICKER_LOCAL_VOICE_ID } from './tts';
 
 describe('NarrationEngine', () => {
   let mockSource: NarrationSource;
@@ -206,6 +207,19 @@ describe('NarrationEngine', () => {
     const engine = createTestEngine();
 
     await engine.start({ sectionIndex: 0, voice: LOCAL_VOICE_ID });
+
+    expect(mockSynthesizeEdge).not.toHaveBeenCalled();
+    expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
+  });
+
+  it('never sends text online when the picker\'s offline voice is chosen', async () => {
+    // Uses the value the voice picker actually stores (./tts), not the engine's
+    // own export. A second, mismatched constant once lived in the engine; the
+    // test above passed because it compared the engine with itself, while the
+    // real offline choice was routed to Microsoft's online engine.
+    const engine = createTestEngine();
+
+    await engine.start({ sectionIndex: 0, voice: PICKER_LOCAL_VOICE_ID });
 
     expect(mockSynthesizeEdge).not.toHaveBeenCalled();
     expect(mockSpeechSynthesis.speak).toHaveBeenCalled();

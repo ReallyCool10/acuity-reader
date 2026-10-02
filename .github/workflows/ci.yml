@@ -13,10 +13,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Must satisfy package.json "engines". On Node 20, jsdom's bundled undici
+      # is missing an API it needs, every test worker crashes, and no test runs.
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies

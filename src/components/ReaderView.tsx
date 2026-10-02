@@ -27,6 +27,17 @@ import {
 import { cleanTitleString } from '../lib/metadata';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
 
+/** Upper bound on waiting for a chapter to render before narrating it (~1s at 60fps). */
+const CHAPTER_RENDER_WAIT_FRAMES = 60;
+
+/** Resolves after the next frame; falls back to a timer where rAF is unavailable. */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 16);
+  });
+}
+
 interface ReaderViewProps {
   item: MediaItem;
   initialProgress?: ProgressItem;
@@ -201,25 +212,30 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       getSection: async (sectionIdx: number) => {
         if (sectionIdx < 0 || sectionIdx >= chapters.length) return null;
 
-        // If the DOM currently displays this chapter, build NarrationMap directly
-        if (chapterIndexRef.current === sectionIdx && proseRef.current) {
-          const map = buildNarrationMap(proseRef.current);
-          narrationMapRef.current = map;
-          if (map.text.trim()) {
-            return { text: map.text };
+        /*
+         * Read the text off the page only once the page is showing this chapter.
+         *
+         * The narration map must come from the rendered DOM so highlight offsets
+         * line up. But onSectionStart updates chapterIndexRef synchronously while
+         * React re-renders later, so trusting the ref read the *previous* chapter
+         * off the page, and auto-advance re-narrated it at every chapter boundary.
+         * The prose element reports which chapter it holds; wait for that instead.
+         */
+        for (let frame = 0; frame <= CHAPTER_RENDER_WAIT_FRAMES; frame++) {
+          const prose = proseRef.current;
+          if (prose && prose.dataset.chapterIndex === String(sectionIdx)) {
+            const map = buildNarrationMap(prose);
+            narrationMapRef.current = map;
+            if (map.text.trim()) return { text: map.text };
+            break;
           }
+          await nextFrame();
         }
 
-        // Wait a frame for React to render the new chapter into proseRef if changing chapters
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-        if (proseRef.current) {
-          const map = buildNarrationMap(proseRef.current);
-          narrationMapRef.current = map;
-          if (map.text.trim()) {
-            return { text: map.text };
-          }
-        }
-
+        // The page never showed this chapter, or it rendered no text. Narrate the
+        // parser's copy so the audio is right, and switch highlighting off rather
+        // than paint ranges from whichever chapter is on screen.
+        narrationMapRef.current = null;
         const fallback = chapters[sectionIdx]?.text || '';
         return fallback.trim() ? { text: fallback } : null;
       },
@@ -817,6 +833,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
             <div
               ref={proseRef}
               onDoubleClick={handleDoubleClickProse}
+              data-chapter-index={chapterIndex}
               data-dropcap={chapterIndex === 0}
               className="relative z-10"
               dangerouslySetInnerHTML={{ __html: currentChapter.html }}
