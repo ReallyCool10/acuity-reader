@@ -63,6 +63,14 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     change, record the old ID in `legacyIds` so `migrateLegacyItemIds` can move the references.
 12. **`ProgressItem.percent` is 0-100 everywhere.** The Continue shelf only shows items above 1,
     so a value on a 0-1 scale silently hides the books a user is part-way through.
+13. **Online narration speed is applied once, by the speech service.** Microsoft synthesises the
+    audio at the chosen rate, so that audio must play at `playbackRate = 1`. Setting
+    `playbackRate` as well squares the speed (1.5x plays at 2.25x). A speed change restarts
+    narration from the current word rather than speeding up the clip in place.
+14. **Narration highlights the word being spoken.** Timings come from the speech service's word
+    boundaries, matched to the text by `alignWordBoundaries` (forward-only, never back to the start
+    of the text), and the audio position is checked on animation frames. The engine reports each
+    word once; keep per-word work in the reader cheap.
 
 ## UI conventions
 

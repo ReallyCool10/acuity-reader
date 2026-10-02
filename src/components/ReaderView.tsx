@@ -10,7 +10,8 @@ import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell'
 import {
   buildNarrationMap,
   clearHighlight,
-  highlightSentence,
+  highlightWord,
+  wordAt,
   sentenceBoundsAt,
   isHighlightSupported,
   FALLBACK_VOICE_CHOICES,
@@ -106,14 +107,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
   const currentChapter = chapters[chapterIndex];
 
-  const [glowRect, setGlowRect] = useState<{
-    top: number;
-    left: number;
-    width: number;
-    height: number;
-    opacity: number;
-  } | null>(null);
-  const articleRef = useRef<HTMLElement | null>(null);
 
   /* ----------------------------------------------------------- progress */
 
@@ -142,7 +135,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const stopNarration = useCallback(() => {
     engineRef.current?.stop();
     clearHighlight();
-    setGlowRect(null);
   }, []);
 
   const saveNarrationProgress = useCallback(
@@ -163,6 +155,13 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     [item.id]
   );
 
+  /*
+   * Words are reported several times a second. Writing each one to storage is
+   * wasted work, so the narration position is saved at most once a second; the
+   * throttle's trailing call keeps the final position.
+   */
+  const saveNarrationProgressThrottled = useThrottledCallback(saveNarrationProgress, 1000);
+
   // Restore saved narration sentence progress for this book and chapter
   useEffect(() => {
     try {
@@ -182,30 +181,31 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     chapterIndexRef.current = chapterIndex;
   }, [chapterIndex]);
 
-  const updateVisualHighlight = useCallback((currentMap: NarrationMap, globalCharIdx: number) => {
-    const range = highlightSentence(currentMap, globalCharIdx);
-    const rect = range?.getBoundingClientRect();
-    const host = scrollRef.current;
-    if (rect && host) {
-      const hostRect = host.getBoundingClientRect();
-      if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
-        host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
+  /**
+   * Highlight the word being spoken and keep it in view.
+   *
+   * `length` comes from the narration engine. Callers without one (starting,
+   * rewinding) pass only a position and the word there is measured. The page
+   * scrolls only when the word nears the top or bottom edge, so steady reading
+   * does not jitter the view.
+   */
+  const updateVisualHighlight = useCallback(
+    (currentMap: NarrationMap, charIdx: number, length?: number) => {
+      const span =
+        length && length > 0 ? { start: charIdx, end: charIdx + length } : wordAt(currentMap.text, charIdx);
+      if (!span) return;
+      const range = highlightWord(currentMap, span.start, span.end);
+      const rect = range?.getBoundingClientRect();
+      const host = scrollRef.current;
+      if (rect && host) {
+        const hostRect = host.getBoundingClientRect();
+        if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
+          host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
+        }
       }
-    }
-    if (range && articleRef.current) {
-      const articleRect = articleRef.current.getBoundingClientRect();
-      const rangeRect = range.getBoundingClientRect();
-      if (rangeRect.width > 0 && rangeRect.height > 0) {
-        setGlowRect({
-          top: rangeRect.top - articleRect.top - 4,
-          left: Math.max(0, rangeRect.left - articleRect.left - 8),
-          width: Math.min(articleRect.width, rangeRect.width + 16),
-          height: rangeRect.height + 8,
-          opacity: 1,
-        });
-      }
-    }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
     const source: NarrationSource = {
@@ -246,7 +246,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
         chapterIndexRef.current = nextChapterIdx;
         setChapterIndex(nextChapterIdx);
         currentCharIndexRef.current = 0;
-        setGlowRect(null);
         clearHighlight();
         if (scrollRef.current) {
           scrollRef.current.scrollTop = 0;
@@ -261,22 +260,20 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
           setIsNarrating(state.isNarrating);
           if (!state.isNarrating) {
             clearHighlight();
-            setGlowRect(null);
           }
         },
-        onBoundary: (charIdx) => {
+        onBoundary: (charIdx, _sectionIdx, length) => {
           currentCharIndexRef.current = charIdx;
-          saveNarrationProgress(charIdx);
+          saveNarrationProgressThrottled(charIdx);
           const map = narrationMapRef.current;
           if (map) {
-            updateVisualHighlight(map, charIdx);
+            updateVisualHighlight(map, charIdx, length);
           }
         },
         onSectionAdvance: (nextChapterIdx) => {
           chapterIndexRef.current = nextChapterIdx;
           setChapterIndex(nextChapterIdx);
           currentCharIndexRef.current = 0;
-          setGlowRect(null);
           clearHighlight();
           if (scrollRef.current) {
             scrollRef.current.scrollTop = 0;
@@ -287,7 +284,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     } else {
       engineRef.current.setSource(source);
     }
-  }, [chapters, item.id, onProgressUpdate, percentFor, saveNarrationProgress, updateVisualHighlight]);
+  }, [chapters, item.id, onProgressUpdate, percentFor, saveNarrationProgressThrottled, updateVisualHighlight]);
 
   useEffect(() => {
     return () => {
@@ -518,7 +515,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       if (index < 0 || index >= chapters.length) return;
       stopNarration();
       currentCharIndexRef.current = 0;
-      setGlowRect(null);
       chapterIndexRef.current = index;
       setChapterIndex(index);
       if (scrollRef.current) scrollRef.current.scrollTop = 0;
@@ -725,7 +721,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
           {!isHighlightSupported() && (
             <p className="text-[10px] leading-snug text-[var(--text-tertiary)]">
-              Sentence highlighting is unavailable in this runtime; narration still works.
+              Word highlighting is unavailable in this runtime; narration still works.
             </p>
           )}
         </>
@@ -784,7 +780,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
         {status === 'ready' && currentChapter && (
           <article
-            ref={articleRef}
             key={currentChapter.id}
             className="reader-prose animate-fade-rise relative"
             style={{
@@ -796,26 +791,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
                   : "'Segoe UI Variable Text', -apple-system, system-ui, sans-serif",
             }}
           >
-            {/* Gentle background glow tracking the active spoken sentence */}
-            {glowRect && glowRect.opacity > 0 && (
-              <div
-                className="pointer-events-none absolute z-0 transition-all duration-300 ease-out"
-                style={{
-                  top: glowRect.top,
-                  left: glowRect.left,
-                  width: glowRect.width,
-                  height: glowRect.height,
-                  opacity: glowRect.opacity,
-                  borderRadius: '8px',
-                  background:
-                    'radial-gradient(ellipse at center, rgba(240, 178, 50, 0.22) 0%, rgba(240, 178, 50, 0.06) 75%, transparent 100%)',
-                  boxShadow:
-                    '0 0 20px 2px rgba(240, 178, 50, 0.18), inset 0 0 10px rgba(240, 178, 50, 0.08)',
-                  borderLeft: '3px solid rgba(240, 178, 50, 0.8)',
-                }}
-                aria-hidden="true"
-              />
-            )}
 
             <header className="mb-8 border-b pb-4 relative z-10" style={{ borderColor: 'var(--reader-rule)' }}>
               <p

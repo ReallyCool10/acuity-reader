@@ -26,7 +26,7 @@ can be read as description rather than aspiration.
 | EPUB reading, spine-ordered with embedded images | Working |
 | PDF reading, with outline, zoom and continuous scroll | Working |
 | In-book full-text search | Working |
-| Read-aloud narration with sentence highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
+| Read-aloud narration with word-by-word highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
 | Bookmarks, with navigation | Working |
 | Sleep timer | Working |
 | Companion pairing of text and audio editions | Working (matched on normalised title) |

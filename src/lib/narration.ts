@@ -1,6 +1,6 @@
 /**
  * Narration support: map spoken character offsets back onto the rendered DOM so
- * the sentence being read can be highlighted.
+ * the word being read can be highlighted.
  *
  * The text handed to the speech engine is built *from* the rendered nodes rather
  * than from the parser's plain-text copy. That guarantees offsets line up: any
@@ -143,22 +143,138 @@ export function rangeFor(map: NarrationMap, start: number, end: number): Range |
 }
 
 /**
- * Paint the active sentence.
+ * Paint the word being spoken.
  *
  * Uses the CSS Custom Highlight API, which styles a Range without touching the
- * DOM — wrapping sentences in spans instead would rewrite the book's markup on
- * every boundary event and collapse any selection the reader had made.
- * Returns the highlighted range so the caller can scroll it into view.
+ * DOM - wrapping words in spans instead would rewrite the book's markup on
+ * every word and collapse any selection the reader had made.
+ * Returns the highlighted range so the caller can keep it in view.
  */
-export function highlightSentence(map: NarrationMap, charIndex: number): Range | null {
+export function highlightWord(map: NarrationMap, start: number, end: number): Range | null {
   if (typeof CSS === 'undefined' || !('highlights' in CSS)) return null;
+  if (end <= start) return null;
 
-  const { start, end } = sentenceBoundsAt(map.text, charIndex);
-  const range = rangeFor(map, start, end);
+  const range = rangeFor(map, start, Math.min(end, map.text.length));
   if (!range) return null;
 
   CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(range));
   return range;
+}
+
+/*
+ * Word boundaries: letters and digits, with apostrophes and hyphens allowed
+ * inside a word so "don't", "o'clock" and "well-known" stay whole. Leading and
+ * trailing punctuation is left out of the highlight.
+ */
+const WORD_PATTERN = /[\p{L}\p{N}](?:[\p{L}\p{N}\u2019'-]*[\p{L}\p{N}])?/gu;
+
+/** The span of the first word starting at or after `index`, or null if none remains. */
+export function wordAt(text: string, index: number): { start: number; end: number } | null {
+  WORD_PATTERN.lastIndex = Math.max(0, index);
+  const match = WORD_PATTERN.exec(text);
+  return match ? { start: match.index, end: match.index + match[0].length } : null;
+}
+
+/** A word in a synthesised chunk, located in the chunk's text and in the audio. */
+export interface TimedWord {
+  /** Character offsets within the chunk text. */
+  start: number;
+  end: number;
+  /** When the word is spoken, in milliseconds from the start of the chunk's audio. */
+  offsetMs: number;
+}
+
+export interface SpeechBoundary {
+  type: 'word' | 'sentence';
+  offsetMs: number;
+  text: string;
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&apos;': "'",
+};
+
+/** Undo the escaping applied when the text was wrapped in SSML for synthesis. */
+function decodeXmlEntities(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos);/g, (entity) => XML_ENTITIES[entity] ?? entity);
+}
+
+/**
+ * Locate each spoken word from the speech service in the chunk's text.
+ *
+ * The service reports the text of each word it spoke, but not where in the
+ * input that word sits, so words are found by searching forwards from the
+ * previous match. Two rules keep the highlight from wandering:
+ *
+ * - It never searches backwards. The old matcher retried from the start of the
+ *   text on a miss, so an unmatched common word ("the") could jump the
+ *   highlight back several sentences.
+ * - It only accepts a match close to where the previous word ended. A word the
+ *   service rendered differently from the text would otherwise latch onto a
+ *   later occurrence and skip ahead. The window widens after consecutive
+ *   misses, so alignment recovers instead of stalling.
+ *
+ * Unmatched words are dropped; the highlight simply stays on the previous word.
+ * If the service sent no word boundaries at all, sentence boundaries are used
+ * so narration still shows some position.
+ */
+export function alignWordBoundaries(chunkText: string, boundaries: SpeechBoundary[]): TimedWord[] {
+  const hasWords = boundaries.some((b) => b.type === 'word');
+  const spoken = boundaries
+    .filter((b) => (hasWords ? b.type === 'word' : b.type === 'sentence') && b.text)
+    .sort((a, b) => a.offsetMs - b.offsetMs);
+
+  const lowerText = chunkText.toLowerCase();
+  const timed: TimedWord[] = [];
+  let cursor = 0;
+  let consecutiveMisses = 0;
+
+  for (const boundary of spoken) {
+    const token = decodeXmlEntities(boundary.text).trim();
+    if (!token) continue;
+
+    const window = 40 + token.length * 2 + consecutiveMisses * 60;
+    let index = chunkText.indexOf(token, cursor);
+    if (index === -1 || index - cursor > window) {
+      index = lowerText.indexOf(token.toLowerCase(), cursor);
+    }
+
+    if (index === -1 || index - cursor > window) {
+      consecutiveMisses += 1;
+      continue;
+    }
+
+    timed.push({ start: index, end: index + token.length, offsetMs: boundary.offsetMs });
+    cursor = index + token.length;
+    consecutiveMisses = 0;
+  }
+
+  return timed;
+}
+
+/**
+ * Index of the word being spoken at `timeMs`: the last word that has started.
+ * Words are ordered by start time, so this is a binary search; it runs on every
+ * animation frame during playback. Returns -1 before the first word.
+ */
+export function findWordIndexAt(words: TimedWord[], timeMs: number): number {
+  let low = 0;
+  let high = words.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (words[mid].offsetMs <= timeMs) {
+      found = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return found;
 }
 
 export function clearHighlight(): void {

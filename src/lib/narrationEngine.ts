@@ -1,5 +1,12 @@
 import type { EdgeSynthesisResult } from '../types';
-import { base64ToBlobUrl, sentenceBoundsAt, splitNarrationChunks } from './narration';
+import {
+  alignWordBoundaries,
+  base64ToBlobUrl,
+  findWordIndexAt,
+  sentenceBoundsAt,
+  splitNarrationChunks,
+  wordAt,
+} from './narration';
 import { isOnlineVoice } from './tts';
 
 /*
@@ -43,7 +50,11 @@ export interface NarrationState {
 
 export interface NarrationEngineEvents {
   onStateChange?: (state: NarrationState) => void;
-  onBoundary?: (charIndex: number, sectionIndex: number) => void;
+  /**
+   * The word being spoken: its start offset in the section text and its length.
+   * Fires once per word (not on every audio tick), so handlers can do real work.
+   */
+  onBoundary?: (charIndex: number, sectionIndex: number, length: number) => void;
   onSectionAdvance?: (sectionIndex: number) => void;
   onError?: (error: unknown) => void;
 }
@@ -55,6 +66,8 @@ export interface NarrationEngineDependencies {
   synthesizeEdge?: (params: { text: string; voice: string; rate: number }) => Promise<EdgeSynthesisResult>;
   revokeBlobUrl?: (url: string) => void;
   base64ToBlobUrl?: (base64: string, mimeType?: string) => string;
+  requestFrame?: (callback: () => void) => number;
+  cancelFrame?: (handle: number) => void;
 }
 
 export interface NarrationStartOptions {
@@ -78,6 +91,9 @@ export class NarrationEngine {
   private abortController: AbortController | null = null;
   private prefetchPromise: Promise<EdgeSynthesisResult> | null = null;
   private currentBlobUrl: string | null = null;
+  private frameHandle: number | null = null;
+  /** Start offset of the last word reported, so each word is reported once. */
+  private lastReportedChar = -1;
   private audio: HTMLAudioElement | null = null;
 
   constructor(
@@ -131,6 +147,7 @@ export class NarrationEngine {
       this.abortController = null;
     }
     this.prefetchPromise = null;
+    this.stopFrameLoop();
 
     if (this.audio) {
       this.audio.pause();
@@ -170,19 +187,18 @@ export class NarrationEngine {
 
   public setRate(newRate: number): void {
     this.currentRate = newRate;
-    if (this.audio) {
-      this.audio.playbackRate = newRate;
-    }
+    /*
+     * Restart from the current word rather than speeding up the clip in place.
+     * Online audio is already synthesised at the chosen speed, so changing
+     * playbackRate as well applied the speed twice (1.5x played at 2.25x).
+     */
     if (this.isNarratingState) {
-      const synth = this.getSpeechSynthesis();
-      if (synth?.speaking) {
-        void this.start({
-          sectionIndex: this.currentSectionIndex,
-          charOffset: this.currentCharIndex,
-          voice: this.currentVoice,
-          rate: newRate,
-        });
-      }
+      void this.start({
+        sectionIndex: this.currentSectionIndex,
+        charOffset: this.currentCharIndex,
+        voice: this.currentVoice,
+        rate: newRate,
+      });
     }
   }
 
@@ -194,6 +210,42 @@ export class NarrationEngine {
 
   private notifyState(): void {
     this.events.onStateChange?.(this.getState());
+  }
+
+  /** Report the word at `charIndex`, once; repeated reports of the same word are ignored. */
+  private reportWord(charIndex: number, length: number, sectionIndex: number): void {
+    this.currentCharIndex = charIndex;
+    if (charIndex === this.lastReportedChar) return;
+    this.lastReportedChar = charIndex;
+    this.events.onBoundary?.(charIndex, sectionIndex, Math.max(1, length));
+  }
+
+  /** Report the first word starting at or after `charIndex` in `text`. */
+  private reportWordAt(text: string, charIndex: number, sectionIndex: number): void {
+    const word = wordAt(text, charIndex);
+    if (word) this.reportWord(word.start, word.end - word.start, sectionIndex);
+  }
+
+  private startFrameLoop(tick: () => void): void {
+    this.stopFrameLoop();
+    const request =
+      this.deps.requestFrame ??
+      (typeof requestAnimationFrame === 'function' ? requestAnimationFrame : undefined);
+    if (!request) return;
+    const loop = () => {
+      tick();
+      this.frameHandle = request(loop);
+    };
+    this.frameHandle = request(loop);
+  }
+
+  private stopFrameLoop(): void {
+    if (this.frameHandle === null) return;
+    const cancel =
+      this.deps.cancelFrame ??
+      (typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : undefined);
+    cancel?.(this.frameHandle);
+    this.frameHandle = null;
   }
 
   private getSpeechSynthesis(): SpeechSynthesis | undefined {
@@ -254,8 +306,9 @@ export class NarrationEngine {
     const startChar = clampedStart > 0 ? sentenceBounds.start : 0;
     this.currentCharIndex = startChar;
 
-    // Immediately emit boundary for the active starting sentence
-    this.events.onBoundary?.(startChar, sectionIndex);
+    // Show the first word straight away, before any audio has arrived.
+    this.lastReportedChar = -1;
+    this.reportWordAt(text, startChar, sectionIndex);
 
     const apiSynthesize =
       this.deps.synthesizeEdge ??
@@ -284,7 +337,8 @@ export class NarrationEngine {
         this.audio = this.deps.createAudio?.() ?? new Audio();
       }
       const audio = this.audio;
-      audio.playbackRate = this.currentRate;
+      // The speech service has already applied the speed; see setRate().
+      audio.playbackRate = 1;
 
       const playChunkAt = async (chunkIndex: number) => {
         if (abortController.signal.aborted) return;
@@ -324,20 +378,7 @@ export class NarrationEngine {
             this.prefetchPromise = nextPromise;
           }
 
-          let searchCursor = 0;
-          const mappedBoundaries = synthesisResult.boundaries.map((b) => {
-            let charOffset = -1;
-            if (b.text) {
-              const foundIdx = chunk.text.indexOf(b.text, searchCursor);
-              if (foundIdx !== -1) {
-                charOffset = foundIdx;
-                searchCursor = foundIdx + b.text.length;
-              } else {
-                charOffset = chunk.text.indexOf(b.text);
-              }
-            }
-            return { ...b, charOffset };
-          });
+          const words = alignWordBoundaries(chunk.text, synthesisResult.boundaries);
 
           if (this.currentBlobUrl) {
             this.revokeUrl(this.currentBlobUrl);
@@ -349,31 +390,26 @@ export class NarrationEngine {
             synthesisResult.mimeType
           );
           audio.src = this.currentBlobUrl;
-          audio.playbackRate = this.currentRate;
+          audio.playbackRate = 1;
 
-          audio.ontimeupdate = () => {
+          /*
+           * Follow the audio word by word. Checked on every animation frame:
+           * timeupdate alone fires only ~4 times a second, which is too coarse
+           * for words. timeupdate stays as a fallback for when frames are
+           * throttled (a hidden window). Each word is reported once.
+           */
+          const syncToAudio = () => {
             if (abortController.signal.aborted) return;
-            const timeMs = audio.currentTime * 1000;
-            let active = mappedBoundaries.find(
-              (b) => timeMs >= b.offsetMs && timeMs < b.offsetMs + b.durationMs
-            );
-            if (!active) {
-              for (let i = mappedBoundaries.length - 1; i >= 0; i--) {
-                if (timeMs >= mappedBoundaries[i].offsetMs) {
-                  active = mappedBoundaries[i];
-                  break;
-                }
-              }
-            }
-
-            if (active && active.charOffset !== -1) {
-              const globalCharIdx = chunk.startChar + active.charOffset;
-              this.currentCharIndex = globalCharIdx;
-              this.events.onBoundary?.(globalCharIdx, sectionIndex);
-            }
+            const index = findWordIndexAt(words, audio.currentTime * 1000);
+            if (index < 0) return;
+            const word = words[index];
+            this.reportWord(chunk.startChar + word.start, word.end - word.start, sectionIndex);
           };
+          audio.ontimeupdate = syncToAudio;
+          this.startFrameLoop(syncToAudio);
 
           audio.onended = () => {
+            this.stopFrameLoop();
             if (this.currentBlobUrl) {
               this.revokeUrl(this.currentBlobUrl);
               this.currentBlobUrl = null;
@@ -382,6 +418,7 @@ export class NarrationEngine {
           };
 
           audio.onerror = () => {
+            this.stopFrameLoop();
             if (this.currentBlobUrl) {
               this.revokeUrl(this.currentBlobUrl);
               this.currentBlobUrl = null;
@@ -392,6 +429,10 @@ export class NarrationEngine {
 
           await audio.play();
         } catch (err) {
+          // play() can reject after the frame loop started; left running, it
+          // would keep pulling the highlight back to this clip's first word
+          // while the system voice reads on.
+          this.stopFrameLoop();
           if (abortController.signal.aborted) return;
           console.warn('Edge TTS synthesis failed, falling back to local speech:', err);
           this.playLocalSpeech(text, this.currentCharIndex, sectionIndex, abortController);
@@ -422,7 +463,8 @@ export class NarrationEngine {
     const bounds = sentenceBoundsAt(text, Math.max(0, fromChar));
     const startChar = fromChar > 0 ? bounds.start : 0;
     this.currentCharIndex = startChar;
-    this.events.onBoundary?.(startChar, sectionIndex);
+    this.lastReportedChar = -1;
+    this.reportWordAt(text, startChar, sectionIndex);
 
     const textToSpeak = startChar > 0 ? text.slice(startChar) : text;
     const createUtterance =
@@ -434,9 +476,15 @@ export class NarrationEngine {
 
     utterance.onboundary = (event) => {
       if (abortController.signal.aborted) return;
+      // Sentence events would move the highlight back to the sentence start.
+      if (event.name && event.name !== 'word') return;
       const globalCharIdx = startChar + event.charIndex;
-      this.currentCharIndex = globalCharIdx;
-      this.events.onBoundary?.(globalCharIdx, sectionIndex);
+      // charLength is not reported by every voice; measure the word instead.
+      if (event.charLength && event.charLength > 0) {
+        this.reportWord(globalCharIdx, event.charLength, sectionIndex);
+      } else {
+        this.reportWordAt(text, globalCharIdx, sectionIndex);
+      }
     };
 
     utterance.onend = () => {
