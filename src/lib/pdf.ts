@@ -230,6 +230,14 @@ export async function renderPdfPage(
     throw new Error('Canvas 2D context is not available');
   }
 
+  // Explicitly reset any existing transform matrix and clear canvas before rendering
+  if (typeof context.setTransform === 'function') {
+    context.setTransform(1, 0, 0, 1, 0, 0);
+  }
+  if (typeof context.clearRect === 'function') {
+    context.clearRect(0, 0, canvas.width, canvas.height);
+  }
+
   const renderContext = {
     canvasContext: context,
     viewport,

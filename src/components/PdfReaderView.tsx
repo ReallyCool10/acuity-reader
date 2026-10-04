@@ -25,6 +25,13 @@ import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
 import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell';
 
+interface ActivePageRender {
+  scale: number;
+  task?: pdfjsLib.RenderTask;
+  promise: Promise<void>;
+  cancel: () => void;
+}
+
 interface PdfReaderViewProps {
   item: MediaItem;
   initialProgress?: ProgressItem;
@@ -51,7 +58,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
-  const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
+  const activeRendersRef = useRef<Map<number, ActivePageRender>>(new Map());
   const restoringRef = useRef(false);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
   const [pageCache] = useState(() => new PixelBudgetCache<HTMLCanvasElement>(PAGE_CACHE_BUDGET_PIXELS, releaseCanvas));
@@ -170,8 +177,11 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
     void load();
 
+    const activeRenders = activeRendersRef.current;
     return () => {
       cancelled = true;
+      activeRenders.forEach((render) => render.cancel());
+      activeRenders.clear();
       if (loaded) {
         void loaded.destroy();
       }
@@ -188,46 +198,108 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
       const cacheKey = `${pageNumber}@${targetScale}`;
       const cached = pageCache.get(cacheKey);
-      if (cached && cached.width === canvas.width && cached.height === canvas.height) {
+      if (cached) {
+        const pixelRatio = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+        canvas.width = cached.width;
+        canvas.height = cached.height;
+        canvas.style.width = `${Math.floor(cached.width / pixelRatio)}px`;
+        canvas.style.height = `${Math.floor(cached.height / pixelRatio)}px`;
         const ctx = canvas.getContext('2d');
         if (ctx) {
+          if (typeof ctx.setTransform === 'function') {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+          }
+          if (typeof ctx.clearRect === 'function') {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+          }
           ctx.drawImage(cached, 0, 0);
           return;
         }
       }
 
-      // Cancel any ongoing render task for this page
-      const ongoing = renderTasksRef.current.get(pageNumber);
-      if (ongoing) {
+      // Check if a render is already in progress for this page
+      const existing = activeRendersRef.current.get(pageNumber);
+      if (existing) {
+        if (existing.scale === targetScale) {
+          // Exactly the same page and scale are currently rendering
+          return existing.promise;
+        }
+        // Different scale requested (e.g. zoom change): cancel and wait for clean abort
+        existing.cancel();
         try {
-          ongoing.cancel();
+          await existing.promise;
         } catch {
-          // Ignore cancelled tasks
+          // Expected cancellation
         }
       }
 
+      // Ensure canvas is still mounted in DOM after awaiting previous task
+      const targetCanvas = canvasRefs.current.get(pageNumber);
+      if (!targetCanvas) return;
+
+      let cancelActive: (() => void) | undefined;
+      let resolveActive!: () => void;
+      let rejectActive!: (err: unknown) => void;
+      const renderPromise = new Promise<void>((resolve, reject) => {
+        resolveActive = resolve;
+        rejectActive = reject;
+      });
+
+      const entry: ActivePageRender = {
+        scale: targetScale,
+        promise: renderPromise,
+        cancel: () => cancelActive?.(),
+      };
+      activeRendersRef.current.set(pageNumber, entry);
+
       try {
         const page = await pdfDoc.getPage(pageNumber);
-        const task = await renderPdfPage(page, canvas, targetScale);
-        renderTasksRef.current.set(pageNumber, task);
+        if (activeRendersRef.current.get(pageNumber) !== entry) {
+          resolveActive();
+          return;
+        }
+
+        const currentCanvas = canvasRefs.current.get(pageNumber);
+        if (!currentCanvas) {
+          resolveActive();
+          return;
+        }
+
+        const task = await renderPdfPage(page, currentCanvas, targetScale);
+        entry.task = task;
+        cancelActive = () => {
+          try {
+            task.cancel();
+          } catch {
+            // ignore
+          }
+        };
+
         await task.promise;
 
-        // Cache the rendered page for instant 0ms restoration
+        // Cache the cleanly rendered page for instant 0ms restoration
         try {
           const offscreen = document.createElement('canvas');
-          offscreen.width = canvas.width;
-          offscreen.height = canvas.height;
+          offscreen.width = currentCanvas.width;
+          offscreen.height = currentCanvas.height;
           const offCtx = offscreen.getContext('2d');
           if (offCtx) {
-            offCtx.drawImage(canvas, 0, 0);
+            offCtx.drawImage(currentCanvas, 0, 0);
             pageCache.set(cacheKey, offscreen);
           }
         } catch {
           // Best-effort offscreen caching
         }
+
+        resolveActive();
       } catch (err: unknown) {
         if (err && typeof err === 'object' && 'name' in err && err.name !== 'RenderingCancelledException') {
           // Ignored normal cancellations
+        }
+        rejectActive(err);
+      } finally {
+        if (activeRendersRef.current.get(pageNumber) === entry) {
+          activeRendersRef.current.delete(pageNumber);
         }
       }
     },
@@ -861,14 +933,10 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
                           void renderSinglePage(pageNum, effectiveScale);
                         } else {
                           canvasRefs.current.delete(pageNum);
-                          const ongoing = renderTasksRef.current.get(pageNum);
-                          if (ongoing) {
-                            try {
-                              ongoing.cancel();
-                            } catch {
-                              // ignore
-                            }
-                            renderTasksRef.current.delete(pageNum);
+                          const active = activeRendersRef.current.get(pageNum);
+                          if (active) {
+                            active.cancel();
+                            activeRendersRef.current.delete(pageNum);
                           }
                         }
                       }}
