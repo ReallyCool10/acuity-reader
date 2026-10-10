@@ -16,7 +16,8 @@ interface ContinueShelfProps {
  * Apple Books leads with this because the thing a reader wants on launch is
  * almost always the book they were last in — not an alphabetical wall.
  */
-export const ContinueShelf: React.FC<ContinueShelfProps> = ({
+// Memoize ContinueShelf to avoid re-rendering the shelf row when unrelated state changes
+export const ContinueShelf: React.FC<ContinueShelfProps> = React.memo(({
   items,
   progress,
   activeAudioId,
@@ -45,4 +46,6 @@ export const ContinueShelf: React.FC<ContinueShelfProps> = ({
       </div>
     </section>
   );
-};
+});
+
+ContinueShelf.displayName = 'ContinueShelf';

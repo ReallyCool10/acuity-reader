@@ -762,7 +762,7 @@ export default function App() {
                         progress={resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id]}
                         isPlaying={activeAudioItem?.id === item.id}
                         onOpen={openItem}
-                        onAddToCollection={(it) => setAddToCollectionItem(it)}
+                        onAddToCollection={setAddToCollectionItem}
                       />
                     ))}
                   </div>

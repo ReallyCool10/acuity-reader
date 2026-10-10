@@ -35,7 +35,8 @@ export function themeForTitle(title: string) {
   return JACKET_THEMES[Math.abs(hash) % JACKET_THEMES.length];
 }
 
-export const BookCard: React.FC<BookCardProps> = ({
+// Memoize BookCard to prevent unnecessary re-renders when parent state (like playback progress tick) updates
+export const BookCard: React.FC<BookCardProps> = React.memo(({
   item,
   progress,
   isPlaying,
@@ -219,4 +220,6 @@ export const BookCard: React.FC<BookCardProps> = ({
       </div>
     </button>
   );
-};
+});
+
+BookCard.displayName = 'BookCard';
