@@ -182,13 +182,48 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     chapterIndexRef.current = chapterIndex;
   }, [chapterIndex]);
 
+  const persistProgress = useThrottledCallback(
+    (index: number, scrollTop: number, ratio: number) => {
+      onProgressUpdate(item.id, index, percentFor(index, ratio), scrollTop);
+    },
+    1500
+  );
+
+  const userScrolledRecentlyRef = useRef(false);
+  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProgrammaticScrollRef = useRef(false);
+
+  const markUserScroll = useCallback(() => {
+    if (isNarrating) {
+      userScrolledRecentlyRef.current = true;
+      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
+      userScrollTimeoutRef.current = setTimeout(() => {
+        userScrolledRecentlyRef.current = false;
+      }, 4000);
+    }
+  }, [isNarrating]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || restoringRef.current || status !== 'ready') return;
+
+    if (isProgrammaticScrollRef.current) {
+      isProgrammaticScrollRef.current = false;
+    }
+
+    const scrollable = el.scrollHeight - el.clientHeight;
+    const ratio = scrollable > 0 ? el.scrollTop / scrollable : 1;
+    persistProgress(chapterIndex, el.scrollTop, ratio);
+  }, [chapterIndex, persistProgress, status]);
+
   const updateVisualHighlight = useCallback((currentMap: NarrationMap, globalCharIdx: number) => {
     const range = highlightSentence(currentMap, globalCharIdx);
     const rect = range?.getBoundingClientRect();
     const host = scrollRef.current;
-    if (rect && host) {
+    if (rect && host && !userScrolledRecentlyRef.current) {
       const hostRect = host.getBoundingClientRect();
-      if (rect.bottom > hostRect.bottom - 80 || rect.top < hostRect.top + 40) {
+      if (rect.bottom > hostRect.bottom - 60 || rect.top < hostRect.top + 30) {
+        isProgrammaticScrollRef.current = true;
         host.scrollBy({ top: rect.top - hostRect.top - hostRect.height / 3, behavior: 'smooth' });
       }
     }
@@ -476,20 +511,6 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
   /* ----------------------------------------------------------- scroll progress */
 
-  const persistProgress = useThrottledCallback(
-    (index: number, scrollTop: number, ratio: number) => {
-      onProgressUpdate(item.id, index, percentFor(index, ratio), scrollTop);
-    },
-    1500
-  );
-
-  const handleScroll = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el || restoringRef.current || status !== 'ready') return;
-    const scrollable = el.scrollHeight - el.clientHeight;
-    const ratio = scrollable > 0 ? el.scrollTop / scrollable : 1;
-    persistProgress(chapterIndex, el.scrollTop, ratio);
-  }, [chapterIndex, persistProgress, status]);
 
   /* Restore saved scroll offset */
   const savedChapterRef = useRef(initialProgress?.chapterIndex ?? -1);
@@ -755,6 +776,11 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       <main
         ref={scrollRef}
         onScroll={handleScroll}
+        onWheel={markUserScroll}
+        onTouchMove={markUserScroll}
+        onPointerDown={(e) => {
+          if (e.target === scrollRef.current) markUserScroll();
+        }}
         className="relative z-10 flex-1 select-text overflow-y-auto px-6 py-10"
         style={{ scrollbarGutter: 'stable both-edges' }}
       >

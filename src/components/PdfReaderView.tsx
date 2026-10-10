@@ -341,8 +341,26 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     250
   );
 
+  const userScrolledRecentlyRef = useRef(false);
+  const userScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProgrammaticScrollRef = useRef(false);
+
+  const markUserScroll = useCallback(() => {
+    if (isNarrating) {
+      userScrolledRecentlyRef.current = true;
+      if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
+      userScrollTimeoutRef.current = setTimeout(() => {
+        userScrolledRecentlyRef.current = false;
+      }, 4000);
+    }
+  }, [isNarrating]);
+
   const handleScroll = useCallback(() => {
     if (restoringRef.current || !containerRef.current || !pdfDoc) return;
+
+    if (isProgrammaticScrollRef.current) {
+      isProgrammaticScrollRef.current = false;
+    }
 
     const container = containerRef.current;
     const numPages = pdfDoc.numPages;
@@ -369,6 +387,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
     setCurrentPage(clamped);
     const target = pageRefs.current.get(clamped);
     if (target) {
+      isProgrammaticScrollRef.current = true;
       target.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
     }
   }, [pdfDoc]);
@@ -435,7 +454,9 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       onSectionStart: (pageNum: number) => {
         narratingPageRef.current = pageNum;
         setNarratingPage(pageNum);
-        scrollToPage(pageNum);
+        if (!userScrolledRecentlyRef.current) {
+          scrollToPage(pageNum);
+        }
       },
     };
 
@@ -450,7 +471,9 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         onSectionAdvance: (nextPage) => {
           narratingPageRef.current = nextPage;
           setNarratingPage(nextPage);
-          scrollToPage(nextPage);
+          if (!userScrolledRecentlyRef.current) {
+            scrollToPage(nextPage);
+          }
         },
       });
     } else {
@@ -790,6 +813,11 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       <main
         ref={containerRef}
         onScroll={handleScroll}
+        onWheel={markUserScroll}
+        onTouchMove={markUserScroll}
+        onPointerDown={(e) => {
+          if (e.target === containerRef.current) markUserScroll();
+        }}
         className="relative z-10 flex-1 overflow-y-auto overflow-x-auto px-4 py-6 scroll-smooth"
         style={{ scrollbarGutter: 'stable both-edges' }}
       >

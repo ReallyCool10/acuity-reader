@@ -674,12 +674,27 @@
 /* ------------------------------------------------------- narration highlight */
 
 /*
- * The CSS Custom Highlight API paints the actively spoken sentence without
+ * The CSS Custom Highlight API paints the actively spoken sentence and words without
  * mutating the chapter DOM — no wrapper spans, so the book's own markup and
  * the user's text selection both stay intact.
  */
 ::highlight(acuity-narration) {
-  background-color: rgba(240, 178, 50, 0.26);
+  background-color: rgba(240, 178, 50, 0.12);
+  color: inherit;
+}
+
+::highlight(acuity-narration-word) {
+  background-color: rgba(240, 178, 50, 0.55);
+  color: inherit;
+}
+
+::highlight(acuity-narration-prev) {
+  background-color: rgba(240, 178, 50, 0.18);
+  color: inherit;
+}
+
+::highlight(acuity-narration-next) {
+  background-color: rgba(240, 178, 50, 0.15);
   color: inherit;
 }
 

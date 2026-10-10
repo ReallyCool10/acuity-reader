@@ -20,6 +20,9 @@ export interface NarrationMap {
 }
 
 const HIGHLIGHT_NAME = 'acuity-narration';
+const HIGHLIGHT_WORD_NAME = 'acuity-narration-word';
+const HIGHLIGHT_PREV_NAME = 'acuity-narration-prev';
+const HIGHLIGHT_NEXT_NAME = 'acuity-narration-next';
 
 const BLOCK_TAGS = new Set([
   'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
@@ -96,6 +99,80 @@ export function buildNarrationMap(container: HTMLElement): NarrationMap {
   return { text, segments };
 }
 
+export interface WordBounds {
+  start: number;
+  end: number;
+}
+
+export interface WordContextBounds {
+  current: WordBounds;
+  prev?: WordBounds;
+  next?: WordBounds;
+  sentence?: { start: number; end: number };
+}
+
+/** Expand a character offset to the word bounds containing or immediately following it. */
+export function wordBoundsAt(text: string, index: number): WordBounds {
+  if (!text) return { start: 0, end: 0 };
+  const clamped = Math.max(0, Math.min(index, text.length - 1));
+
+  // If index points to whitespace, find next non-whitespace character
+  let startIdx = clamped;
+  while (startIdx < text.length && /\s/.test(text[startIdx])) {
+    startIdx++;
+  }
+  if (startIdx >= text.length) {
+    // End of text or trailing whitespace: backtrack to last word
+    startIdx = clamped;
+    while (startIdx > 0 && /\s/.test(text[startIdx])) {
+      startIdx--;
+    }
+  }
+
+  // Find start of word
+  let start = startIdx;
+  while (start > 0 && !/\s/.test(text[start - 1])) {
+    start--;
+  }
+
+  // Find end of word
+  let end = startIdx;
+  while (end < text.length && !/\s/.test(text[end])) {
+    end++;
+  }
+
+  return { start, end };
+}
+
+/** Get current, previous, and next word bounds around a character offset. */
+export function wordContextAt(text: string, index: number): WordContextBounds {
+  const current = wordBoundsAt(text, index);
+  let prev: WordBounds | undefined;
+  let next: WordBounds | undefined;
+
+  // Find previous word before current.start
+  let pIdx = current.start - 1;
+  while (pIdx >= 0 && /\s/.test(text[pIdx])) {
+    pIdx--;
+  }
+  if (pIdx >= 0) {
+    prev = wordBoundsAt(text, pIdx);
+  }
+
+  // Find next word after current.end
+  let nIdx = current.end;
+  while (nIdx < text.length && /\s/.test(text[nIdx])) {
+    nIdx++;
+  }
+  if (nIdx < text.length) {
+    next = wordBoundsAt(text, nIdx);
+  }
+
+  const sentence = sentenceBoundsAt(text, current.start);
+
+  return { current, prev, next, sentence };
+}
+
 /** Expand a character offset to the sentence containing it. */
 export function sentenceBoundsAt(text: string, index: number): { start: number; end: number } {
   const terminators = /[.!?…]["')\]]?\s|\n\n+/g;
@@ -153,17 +230,45 @@ export function rangeFor(map: NarrationMap, start: number, end: number): Range |
 export function highlightSentence(map: NarrationMap, charIndex: number): Range | null {
   if (typeof CSS === 'undefined' || !('highlights' in CSS)) return null;
 
-  const { start, end } = sentenceBoundsAt(map.text, charIndex);
-  const range = rangeFor(map, start, end);
-  if (!range) return null;
+  const ctx = wordContextAt(map.text, charIndex);
+  const sentenceRange = rangeFor(map, ctx.sentence?.start ?? ctx.current.start, ctx.sentence?.end ?? ctx.current.end);
+  const currentRange = rangeFor(map, ctx.current.start, ctx.current.end);
+  const prevRange = ctx.prev ? rangeFor(map, ctx.prev.start, ctx.prev.end) : null;
+  const nextRange = ctx.next ? rangeFor(map, ctx.next.start, ctx.next.end) : null;
 
-  CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(range));
-  return range;
+  if (sentenceRange) {
+    CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(sentenceRange));
+  } else {
+    CSS.highlights.delete(HIGHLIGHT_NAME);
+  }
+
+  if (currentRange) {
+    CSS.highlights.set(HIGHLIGHT_WORD_NAME, new Highlight(currentRange));
+  } else {
+    CSS.highlights.delete(HIGHLIGHT_WORD_NAME);
+  }
+
+  if (prevRange) {
+    CSS.highlights.set(HIGHLIGHT_PREV_NAME, new Highlight(prevRange));
+  } else {
+    CSS.highlights.delete(HIGHLIGHT_PREV_NAME);
+  }
+
+  if (nextRange) {
+    CSS.highlights.set(HIGHLIGHT_NEXT_NAME, new Highlight(nextRange));
+  } else {
+    CSS.highlights.delete(HIGHLIGHT_NEXT_NAME);
+  }
+
+  return currentRange || sentenceRange;
 }
 
 export function clearHighlight(): void {
   if (typeof CSS !== 'undefined' && 'highlights' in CSS) {
     CSS.highlights.delete(HIGHLIGHT_NAME);
+    CSS.highlights.delete(HIGHLIGHT_WORD_NAME);
+    CSS.highlights.delete(HIGHLIGHT_PREV_NAME);
+    CSS.highlights.delete(HIGHLIGHT_NEXT_NAME);
   }
 }
 

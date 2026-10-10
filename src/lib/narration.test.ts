@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sentenceBoundsAt } from './narration';
+import { sentenceBoundsAt, wordBoundsAt, wordContextAt } from './narration';
 
 describe('src/lib/narration - sentenceBoundsAt', () => {
   const text =
@@ -31,6 +31,23 @@ describe('src/lib/narration - sentenceBoundsAt', () => {
     expect(multiPara.slice(bounds.start, bounds.end).trim()).toBe(
       'Second paragraph content begins right here.'
     );
+  });
+});
+
+describe('src/lib/narration - wordBoundsAt & wordContextAt', () => {
+  it('computes word bounds correctly', () => {
+    const text = 'Hello world testing';
+    const bounds = wordBoundsAt(text, 7); // 'w' in 'world'
+    expect(bounds).toEqual({ start: 6, end: 11 });
+    expect(text.slice(bounds.start, bounds.end)).toBe('world');
+  });
+
+  it('computes word context bounds correctly', () => {
+    const text = 'First second third.';
+    const ctx = wordContextAt(text, 7); // 's' in 'second'
+    expect(ctx.current).toEqual({ start: 6, end: 12 });
+    expect(ctx.prev).toEqual({ start: 0, end: 5 });
+    expect(ctx.next).toEqual({ start: 13, end: 19 });
   });
 });
 
