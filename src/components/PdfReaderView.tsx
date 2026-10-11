@@ -9,6 +9,7 @@ import {
   renderPdfPage,
   type PdfDocumentInfo,
 } from '../lib/pdf';
+import { PAGE_CACHE_BUDGET_PIXELS, PixelBudgetCache, releaseCanvas } from '../lib/pageCache';
 import type * as pdfjsLib from 'pdfjs-dist';
 import { searchInText, type SearchResultItem } from '../lib/search';
 import { FALLBACK_VOICE_CHOICES } from '../lib/narration';
@@ -53,7 +54,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map());
   const restoringRef = useRef(false);
   const pageTextCacheRef = useRef<Map<number, string>>(new Map());
-  const pageCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const [pageCache] = useState(() => new PixelBudgetCache<HTMLCanvasElement>(PAGE_CACHE_BUDGET_PIXELS, releaseCanvas));
   const onMetadataUpdateRef = useRef(onMetadataUpdate);
   const itemRef = useRef(item);
   useEffect(() => {
@@ -186,7 +187,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       if (!canvas) return;
 
       const cacheKey = `${pageNumber}@${targetScale}`;
-      const cached = pageCacheRef.current.get(cacheKey);
+      const cached = pageCache.get(cacheKey);
       if (cached && cached.width === canvas.width && cached.height === canvas.height) {
         const ctx = canvas.getContext('2d');
         if (ctx) {
@@ -219,11 +220,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
           const offCtx = offscreen.getContext('2d');
           if (offCtx) {
             offCtx.drawImage(canvas, 0, 0);
-            if (pageCacheRef.current.size >= 25) {
-              const oldestKey = pageCacheRef.current.keys().next().value;
-              if (oldestKey) pageCacheRef.current.delete(oldestKey);
-            }
-            pageCacheRef.current.set(cacheKey, offscreen);
+            pageCache.set(cacheKey, offscreen);
           }
         } catch {
           // Best-effort offscreen caching
@@ -234,8 +231,11 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         }
       }
     },
-    [pdfDoc]
+    [pdfDoc, pageCache]
   );
+
+  // Free the cached pages as soon as the reader closes.
+  useEffect(() => () => pageCache.clear(), [pageCache]);
 
   /* ------------------------------------------------------------ fit width calculation */
 
