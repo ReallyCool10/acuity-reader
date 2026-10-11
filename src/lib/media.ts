@@ -15,12 +15,35 @@ export function mediaUrl(absolutePath: string): string {
 }
 
 /** Covers extracted at scan time are already absolute paths; normalise both shapes. */
-export function coverUrl(item: Pick<MediaItem, 'coverUrl'>): string {
+function coverPath(item: Pick<MediaItem, 'coverUrl'>): string {
   if (!item.coverUrl) return '';
-  const raw = item.coverUrl.startsWith('file:///')
+  return item.coverUrl.startsWith('file:///')
     ? decodeURI(item.coverUrl.slice('file:///'.length))
     : item.coverUrl;
-  return mediaUrl(raw);
+}
+
+const NON_FILE_URL = /^(acuity|https?|data|blob):/i;
+
+/** The cover's path on disk, or '' when it has none or it is not a local file. */
+export function localCoverPath(item: Pick<MediaItem, 'coverUrl'>): string {
+  const raw = coverPath(item);
+  return NON_FILE_URL.test(raw) ? '' : raw;
+}
+
+/** The full-size cover, for the full-screen player and the system media controls. */
+export function coverUrl(item: Pick<MediaItem, 'coverUrl'>): string {
+  return mediaUrl(coverPath(item));
+}
+
+/**
+ * A small copy of the cover, for shelves and lists. Thumbnails are made in the
+ * background (`src/lib/thumbnails.ts`) and kept by the main process, which
+ * serves the original until one exists. A cover that is not a local file is
+ * used as it is.
+ */
+export function coverThumbUrl(item: Pick<MediaItem, 'coverUrl'>): string {
+  const local = localCoverPath(item);
+  return local ? `acuity://thumb/${encodeURIComponent(local)}` : coverPath(item);
 }
 
 export function isReadable(item: MediaItem): boolean {

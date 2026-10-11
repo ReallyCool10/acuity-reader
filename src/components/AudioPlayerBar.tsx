@@ -20,13 +20,13 @@ import {
   X,
 } from 'lucide-react';
 import type { Bookmark as BookmarkType, MediaItem } from '../types';
-import { coverUrl, mediaUrl } from '../lib/media';
+import { coverThumbUrl, coverUrl, mediaUrl } from '../lib/media';
 import { formatRemaining, formatTime } from '../lib/format';
 import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { useDismissable } from '../hooks/useDismissable';
 import { Scrubber } from './Scrubber';
-import { themeForTitle } from './BookCard';
+import { themeForTitle } from '../lib/coverArt';
 import { getTrackForTime } from '../lib/audiobookGrouping';
 
 export interface AudioPlayerBarProps {
@@ -189,6 +189,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
   }, [item.durationSeconds, hasMultipleTracks, tracks]);
 
   const cover = coverUrl(item);
+  const coverThumb = coverThumbUrl(item);
   const displayTitle = useMemo(() => cleanTitleString(item.title) || item.title, [item.title]);
   const jacketTheme = useMemo(() => themeForTitle(displayTitle), [displayTitle]);
 
@@ -1051,9 +1052,9 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
             title="Expand to full screen"
             className="group relative shrink-0 rounded-[var(--radius-sm)]"
           >
-            {cover && !coverFailed ? (
+            {coverThumb && !coverFailed ? (
               <img
-                src={cover}
+                src={coverThumb}
                 alt=""
                 onError={() => setFailedCoverId(item.id)}
                 className="h-10 w-[30px] rounded-[3px] object-cover shadow-[var(--shadow-sm)]"

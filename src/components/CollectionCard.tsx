@@ -2,7 +2,7 @@ import React from 'react';
 import { Layers, Library } from 'lucide-react';
 import type { Collection } from '../types';
 import type { CollectionWorkItem } from '../lib/collections';
-import { coverUrl } from '../lib/media';
+import { coverThumbUrl } from '../lib/media';
 
 interface CollectionCardProps {
   collection: Collection;
@@ -82,9 +82,9 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
         ) : mosaicItems.length === 1 ? (
           /* Single cover */
           <div className="relative h-full w-full">
-            {coverUrl(mosaicItems[0]) ? (
+            {coverThumbUrl(mosaicItems[0]) ? (
               <img
-                src={coverUrl(mosaicItems[0])}
+                src={coverThumbUrl(mosaicItems[0])}
                 alt=""
                 loading="lazy"
                 decoding="async"
@@ -100,7 +100,7 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
           /* 2 or 3 items split */
           <div className="grid h-full w-full grid-cols-2 divide-x divide-black/30">
             {mosaicItems.slice(0, 2).map((item, idx) => {
-              const url = coverUrl(item);
+              const url = coverThumbUrl(item);
               return (
                 <div key={item.id || idx} className="relative h-full w-full overflow-hidden bg-[var(--surface-raised)]">
                   {url ? (
@@ -124,7 +124,7 @@ export const CollectionCard: React.FC<CollectionCardProps> = ({
           /* 4 items quadrant mosaic */
           <div className="grid h-full w-full grid-cols-2 grid-rows-2 divide-x divide-y divide-black/30">
             {mosaicItems.map((item, idx) => {
-              const url = coverUrl(item);
+              const url = coverThumbUrl(item);
               return (
                 <div key={item.id || idx} className="relative h-full w-full overflow-hidden bg-[var(--surface-raised)]">
                   {url ? (

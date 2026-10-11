@@ -26,6 +26,8 @@ import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
+import { createThumbnailStore, isJpeg, MAX_THUMB_BYTES, type ThumbnailStore } from './thumbnails';
+import { findEpubCover } from './epubCover';
 import {
   configureMcpRuntime,
   getMcpClients,
@@ -81,7 +83,8 @@ process.on('unhandledRejection', (err) => logError('unhandledRejection', err));
 
 /**
  * The renderer never touches `file://`. It requests `acuity://media/<encoded path>`
- * and this process decides whether to serve it.
+ * and this process decides whether to serve it. `acuity://thumb/<encoded path>`
+ * is the same check, answered with a small copy of an image for shelves.
  *
  * That inversion is what lets `webSecurity` stay enabled. The previous build
  * disabled it so the renderer could load local audio and covers directly, which
@@ -126,9 +129,11 @@ const CONTENT_TYPES: Record<string, string> = {
  */
 async function serveFile(request: Request): Promise<Response> {
   let filePath: string;
+  let wantsThumbnail: boolean;
   try {
     const url = new URL(request.url);
     filePath = path.normalize(decodeURIComponent(url.pathname.replace(/^\//, '')));
+    wantsThumbnail = url.hostname === 'thumb';
   } catch {
     return new Response('Bad request', { status: 400 });
   }
@@ -143,6 +148,19 @@ async function serveFile(request: Request): Promise<Response> {
     if (!stat.isFile()) return new Response('Not found', { status: 404 });
   } catch {
     return new Response('Not found', { status: 404 });
+  }
+
+  // The source path passed the allowlist above; its thumbnail lives in our own cache.
+  if (wantsThumbnail) {
+    const servePath = await getThumbnails().servePath(filePath, stat);
+    if (servePath !== filePath) {
+      try {
+        stat = await fs.promises.stat(servePath);
+        filePath = servePath;
+      } catch {
+        // Thumbnail vanished between creation and serving; fall back to the source.
+      }
+    }
   }
 
   const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
@@ -489,8 +507,31 @@ function getCoversDir(): string {
   return dir;
 }
 
+let thumbnails: ThumbnailStore | null = null;
+
+function getThumbnails(): ThumbnailStore {
+  thumbnails ??= createThumbnailStore(path.join(app.getPath('userData'), 'thumbs'));
+  return thumbnails;
+}
+
+/** Absolute cover paths for a set of items; older libraries stored some as file:/// URLs. */
+function coverPathsOf(items: Array<{ coverUrl?: string }>): string[] {
+  const paths: string[] = [];
+  for (const { coverUrl } of items) {
+    if (!coverUrl) continue;
+    const raw = coverUrl.startsWith('file:///') ? decodeURI(coverUrl.slice('file:///'.length)) : coverUrl;
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && isAllowedPath(raw)) paths.push(raw);
+  }
+  return paths;
+}
+
 function cacheKeyFor(filePath: string): string {
   return crypto.createHash('md5').update(filePath).digest('hex');
+}
+
+/** Where a cover drawn from a PDF's first page is kept (made by src/lib/pdfCovers.ts). */
+function pdfCoverPathFor(filePath: string): string {
+  return path.join(getCoversDir(), `${cacheKeyFor(filePath)}.pdf-page1.jpg`);
 }
 
 async function isDedicatedWorkDirectory(dirPath: string): Promise<boolean> {
@@ -536,7 +577,9 @@ async function findOrExtractCover(
 
     // 2. Embedded artwork takes absolute precedence over generic folder images
     const cachedCoverPath = path.join(getCoversDir(), `${cacheKeyFor(filePath)}.jpg`);
-    if (fs.existsSync(cachedCoverPath)) return cachedCoverPath;
+    const isEpub = path.extname(fileName).toLowerCase() === '.epub';
+    // An EPUB's cached .jpg came from the old filename guess; it is extracted afresh below.
+    if (!isEpub && fs.existsSync(cachedCoverPath)) return cachedCoverPath;
 
     if (mediaType === 'audio') {
       try {
@@ -554,15 +597,16 @@ async function findOrExtractCover(
       }
     }
 
-    if (path.extname(fileName).toLowerCase() === '.epub') {
+    if (isEpub) {
       try {
-        const zip = await JSZip.loadAsync(await fs.promises.readFile(filePath));
-        const entry =
-          Object.values(zip.files).find((f) => !f.dir && /cover.*\.(jpe?g|png|webp)$/i.test(f.name)) ||
-          Object.values(zip.files).find((f) => !f.dir && /\.(jpe?g|png|webp)$/i.test(f.name));
-        if (entry) {
-          await fs.promises.writeFile(cachedCoverPath, await entry.async('nodebuffer'));
-          return cachedCoverPath;
+        // The cover the book declares (epubCover.ts), saved under a name the old
+        // guess never used, so isCacheHit can tell the two apart.
+        const cover = await findEpubCover(await JSZip.loadAsync(await fs.promises.readFile(filePath)));
+        if (cover) {
+          const target = path.join(getCoversDir(), `${cacheKeyFor(filePath)}.epub-v2${cover.extension}`);
+          await fs.promises.writeFile(target, await cover.entry.async('nodebuffer'));
+          await fs.promises.unlink(cachedCoverPath).catch(() => undefined);
+          return target;
         }
       } catch {
         // Malformed archive; card falls back to generated jacket.
@@ -580,6 +624,11 @@ async function findOrExtractCover(
           if (fs.existsSync(candidate)) return candidate;
         }
       }
+    }
+
+    // 4. A PDF's first page, drawn by the renderer when it had no other cover.
+    if (path.extname(fileName).toLowerCase() === '.pdf' && fs.existsSync(pdfCoverPathFor(filePath))) {
+      return pdfCoverPathFor(filePath);
     }
   } catch (err) {
     logError('cover', err);
@@ -855,6 +904,8 @@ ipcMain.handle('storage:load', async () => {
       }
       for (const folder of migrated?.folders ?? []) registerAllowedRoot(folder);
       registerAllowedRoot(getCoversDir());
+      // Drop shelf thumbnails no book uses any more.
+      void getThumbnails().prune(coverPathsOf((migrated.items || []) as ScannedItem[]));
       return {
         ...migrated,
         collections: Array.isArray(migrated.collections) ? migrated.collections : [],
@@ -890,6 +941,66 @@ ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?
     }, 1000);
   }
   return true;
+});
+
+/* Shelf thumbnails are made by a worker in the renderer and kept by this process. */
+ipcMain.handle('thumbs:missing', async (_event, sourcePaths: unknown) => {
+  if (!Array.isArray(sourcePaths)) return [];
+  const allowed = sourcePaths.filter((p): p is string => typeof p === 'string' && isAllowedPath(p));
+  return getThumbnails().missing(allowed);
+});
+
+ipcMain.handle('thumbs:save', async (_event, sourcePath: unknown, jpeg: unknown) => {
+  if (typeof sourcePath !== 'string' || !isAllowedPath(sourcePath) || !(jpeg instanceof Uint8Array)) return false;
+  try {
+    return await getThumbnails().save(sourcePath, jpeg);
+  } catch (err) {
+    logError('thumbs-save', err);
+    return false;
+  }
+});
+
+ipcMain.handle('covers:savePdfCover', async (_event, pdfPath: unknown, jpeg: unknown) => {
+  if (typeof pdfPath !== 'string' || !isAllowedPath(pdfPath) || path.extname(pdfPath).toLowerCase() !== '.pdf') {
+    return null;
+  }
+  if (!(jpeg instanceof Uint8Array) || !isJpeg(jpeg) || jpeg.length > MAX_THUMB_BYTES) return null;
+  try {
+    await fs.promises.access(pdfPath);
+    const target = pdfCoverPathFor(pdfPath);
+    const temp = `${target}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temp, jpeg);
+    await fs.promises.rename(temp, target);
+    return target;
+  } catch (err) {
+    logError('pdf-cover', err);
+    return null;
+  }
+});
+
+/** A slice of a file, so pdf.js can read only the parts of a PDF it needs. Same allowlist. */
+const MAX_RANGE_BYTES = 8 * 1024 * 1024;
+
+ipcMain.handle('file:readRange', async (_event, filePath: unknown, start: unknown, end: unknown) => {
+  if (typeof filePath !== 'string' || !isAllowedPath(filePath)) return null;
+  if (typeof start !== 'number' || typeof end !== 'number' || !Number.isSafeInteger(start) || !Number.isSafeInteger(end)) {
+    return null;
+  }
+  if (start < 0 || end <= start || end - start > MAX_RANGE_BYTES) return null;
+
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(path.resolve(filePath), 'r');
+    const { size } = await handle.stat();
+    const bytes = new Uint8Array(Math.max(0, Math.min(end, size) - start));
+    const { bytesRead } = bytes.length > 0 ? await handle.read(bytes, 0, bytes.length, start) : { bytesRead: 0 };
+    return { bytes: bytes.subarray(0, bytesRead), size };
+  } catch (err) {
+    logError('file-read-range', err);
+    return null;
+  } finally {
+    await handle?.close();
+  }
 });
 
 /** Raw bytes for in-renderer EPUB parsing. Gated by the same allowlist as the protocol. */

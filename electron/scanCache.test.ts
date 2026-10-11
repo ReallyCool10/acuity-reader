@@ -77,6 +77,19 @@ describe('electron/scanCache - isCacheHit', () => {
     ).toBe(false);
   });
 
+  it('re-extracts an EPUB cover chosen by the old filename guess, and only that', () => {
+    const md5 = '0123456789abcdef0123456789abcdef';
+    const guessed = { ...validCandidate, format: 'epub', coverUrl: `C:\\Users\\R\\AppData\\covers\\${md5}.jpg` };
+    expect(isCacheHit(guessed, baseStat)).toBe(false);
+
+    // Covers from the book's own declaration, audio covers in the same cache, and EPUBs with
+    // no cover or a sidecar image are all kept.
+    expect(isCacheHit({ ...guessed, coverUrl: `C:\\covers\\${md5}.epub-v2.png` }, baseStat)).toBe(true);
+    expect(isCacheHit({ ...guessed, format: 'm4b' }, baseStat)).toBe(true);
+    expect(isCacheHit({ ...guessed, coverUrl: undefined }, baseStat)).toBe(true);
+    expect(isCacheHit({ ...guessed, coverUrl: 'D:/Books/Dune.jpg' }, baseStat)).toBe(true);
+  });
+
   it('returns false if title contains corrupted shadow-library artifacts', () => {
     expect(
       isCacheHit(

@@ -2,7 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Check, Headphones, BookOpen, Search, X } from 'lucide-react';
 import type { Collection, MediaItem } from '../types';
 import { useDismissable } from '../hooks/useDismissable';
-import { coverUrl } from '../lib/media';
+import { coverThumbUrl } from '../lib/media';
 
 interface CollectionMemberPickerModalProps {
   isOpen: boolean;
@@ -94,7 +94,7 @@ export const CollectionMemberPickerModal: React.FC<CollectionMemberPickerModalPr
               {displayItems.map((item) => {
                 const isMember = memberSet.has(item.id);
                 const isAudio = item.mediaType === 'audio';
-                const url = coverUrl(item);
+                const url = coverThumbUrl(item);
 
                 return (
                   <button

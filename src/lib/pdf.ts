@@ -20,17 +20,106 @@ export interface PdfChapter {
 }
 
 /**
- * Loads a PDF document from a URL or ArrayBuffer/Uint8Array.
+ * Loads a PDF document from its bytes. Prefer `openPdfByRanges`, which reads
+ * only what is needed; this is the fallback when ranges are unavailable.
  */
-export async function loadPdfDocument(
-  source: string | Uint8Array | ArrayBuffer
-): Promise<pdfjsLib.PDFDocumentProxy> {
-  const loadingTask =
-    typeof source === 'string'
-      ? pdfjsLib.getDocument({ url: source })
-      : pdfjsLib.getDocument({ data: source instanceof Uint8Array ? source : new Uint8Array(source) });
+export async function loadPdfDocument(source: Uint8Array | ArrayBuffer): Promise<pdfjsLib.PDFDocumentProxy> {
+  return pdfjsLib.getDocument({ data: source instanceof Uint8Array ? source : new Uint8Array(source) }).promise;
+}
 
-  return loadingTask.promise;
+/** Reads bytes [start, end) of one file, with the file's total size. */
+export type ByteRangeReader = (start: number, end: number) => Promise<{ bytes: Uint8Array; size: number } | null>;
+
+/** pdf.js's chunk size; every range it asks for starts on a multiple of it. */
+const RANGE_CHUNK_SIZE = 64 * 1024;
+/**
+ * The most one read may return: `MAX_RANGE_BYTES` in electron/main.ts. A
+ * multiple of the chunk size, so each piece of a split request starts on a
+ * chunk boundary, as pdf.js requires.
+ */
+const MAX_RANGE_READ = 8 * 1024 * 1024;
+
+/**
+ * Feeds pdf.js only the byte ranges it asks for. Streaming a PDF from its
+ * `acuity://` URL does not work from the renderer: the page's origin is
+ * file://, so CORS blocks script from reading the response, and the old
+ * fallback copied the whole file. This reads ranges over IPC instead.
+ */
+class RangeReaderTransport extends pdfjsLib.PDFDataRangeTransport {
+  private readonly readRange: ByteRangeReader;
+
+  constructor(size: number, initialData: Uint8Array, readRange: ByteRangeReader) {
+    super(size, initialData);
+    this.readRange = readRange;
+  }
+
+  requestDataRange(begin: number, end: number) {
+    void this.deliver(begin, end);
+  }
+
+  /** A large scanned page can need more than one read allows; ask in pieces. */
+  private async deliver(begin: number, end: number) {
+    for (let start = begin; start < end; start += MAX_RANGE_READ) {
+      const result = await this.readRange(start, Math.min(end, start + MAX_RANGE_READ)).catch(() => null);
+      if (!result) return;
+      this.onDataRange(start, result.bytes);
+    }
+  }
+}
+
+/**
+ * Open a PDF reading only the byte ranges pdf.js asks for, so a page costs the
+ * same however large the file is. Null if the file cannot be read.
+ */
+export async function openPdfByRanges(readRange: ByteRangeReader): Promise<pdfjsLib.PDFDocumentLoadingTask | null> {
+  const first = await readRange(0, RANGE_CHUNK_SIZE).catch(() => null);
+  if (!first || first.size === 0) return null;
+  return pdfjsLib.getDocument({
+    range: new RangeReaderTransport(first.size, first.bytes, readRange),
+    rangeChunkSize: RANGE_CHUNK_SIZE,
+    // Fetch on demand only; the default would go on to read the rest of the file.
+    disableAutoFetch: true,
+    disableStream: true,
+  });
+}
+
+const COVER_TIMEOUT_MS = 30_000;
+
+/**
+ * A PDF's first page as a JPEG, fitted within `maxSize` pixels, to serve as its
+ * cover. Only the parts of the file page 1 needs are read, so a large scanned
+ * book costs no more than a small one. Null if the page cannot be drawn.
+ *
+ * pdf.js parses in its own worker and draws in short slices between frames, so
+ * this does not hold up scrolling.
+ */
+export async function renderPdfCover(readRange: ByteRangeReader, maxSize: number): Promise<Uint8Array | null> {
+  const task = await openPdfByRanges(readRange);
+  if (!task) return null;
+  // A range that never arrives would otherwise leave pdf.js waiting for good.
+  const timeout = setTimeout(() => void task.destroy(), COVER_TIMEOUT_MS);
+  try {
+    const doc = await task.promise;
+    const page = await doc.getPage(1);
+    const natural = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: maxSize / Math.max(natural.width, natural.height) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    void task.destroy();
+  }
 }
 
 /**

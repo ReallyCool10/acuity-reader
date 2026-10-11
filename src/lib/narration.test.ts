@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sentenceBoundsAt } from './narration';
+import { alignWordBoundaries, findWordIndexAt, sentenceBoundsAt, wordAt } from './narration';
 
 describe('src/lib/narration - sentenceBoundsAt', () => {
   const text =
@@ -125,3 +125,86 @@ describe('src/lib/narration - base64ToBlobUrl', () => {
   });
 });
 
+
+describe('word tracking helpers', () => {
+  describe('wordAt', () => {
+    it('keeps apostrophes and hyphens inside words and leaves punctuation out', () => {
+      const text = 'He said, “don’t go” — a well-known line.';
+      const words: string[] = [];
+      let w = wordAt(text, 0);
+      while (w) {
+        words.push(text.slice(w.start, w.end));
+        w = wordAt(text, w.end);
+      }
+      expect(words).toEqual(['He', 'said', 'don’t', 'go', 'a', 'well-known', 'line']);
+    });
+
+    it('returns null when no word remains', () => {
+      expect(wordAt('The end. ', 7)).toBeNull();
+    });
+  });
+
+  describe('alignWordBoundaries', () => {
+    const word = (text: string, offsetMs: number) => ({ type: 'word' as const, offsetMs, text });
+    const sentence = (text: string, offsetMs: number) => ({ type: 'sentence' as const, offsetMs, text });
+
+    it('uses word timings and ignores sentence entries when both are sent', () => {
+      const text = 'The cat sat. The dog ran.';
+      const aligned = alignWordBoundaries(text, [
+        sentence('The cat sat.', 0), word('The', 0), word('cat', 300), word('sat', 600),
+        sentence('The dog ran.', 1000), word('The', 1000), word('dog', 1300), word('ran', 1600),
+      ]);
+      expect(aligned.map((w) => text.slice(w.start, w.end))).toEqual(['The', 'cat', 'sat', 'The', 'dog', 'ran']);
+      expect(aligned[3].start).toBe(13); // the second "The", not the first
+    });
+
+    it('never jumps backwards when a word cannot be matched', () => {
+      // The old matcher retried from the start of the text on a miss, so this
+      // unmatched word would have moved the highlight back to the first "the".
+      const text = 'the start, then much later the end';
+      const aligned = alignWordBoundaries(text, [
+        word('the', 0), word('start', 200), word('then', 400), word('much', 600), word('later', 800),
+        word('THE-UNMATCHED', 900), word('the', 1000), word('end', 1200),
+      ]);
+      const starts = aligned.map((w) => w.start);
+      expect(starts).toEqual([...starts].sort((a, b) => a - b));
+      expect(text.slice(aligned[aligned.length - 2].start, aligned[aligned.length - 2].end)).toBe('the');
+      expect(aligned[aligned.length - 2].start).toBe(27);
+    });
+
+    it('matches words containing characters escaped for the speech service', () => {
+      const text = "Don't stop & go.";
+      const aligned = alignWordBoundaries(text, [word('Don&apos;t', 0), word('stop', 300), word('&amp;', 500), word('go', 700)]);
+      expect(aligned.map((w) => text.slice(w.start, w.end))).toEqual(["Don't", 'stop', '&', 'go']);
+    });
+
+    it('recovers alignment after several unmatched words', () => {
+      const text = 'alpha beta gamma delta epsilon zeta eta theta';
+      const aligned = alignWordBoundaries(text, [
+        word('alpha', 0), word('XX1', 100), word('XX2', 200), word('XX3', 300), word('theta', 400),
+      ]);
+      expect(aligned.map((w) => text.slice(w.start, w.end))).toEqual(['alpha', 'theta']);
+    });
+
+    it('falls back to sentence timings when no word timings are sent', () => {
+      const text = 'One two. Three four.';
+      const aligned = alignWordBoundaries(text, [sentence('One two.', 0), sentence('Three four.', 900)]);
+      expect(aligned.map((w) => w.start)).toEqual([0, 9]);
+    });
+  });
+
+  describe('findWordIndexAt', () => {
+    const words = [0, 300, 600, 900].map((offsetMs, i) => ({ start: i * 4, end: i * 4 + 3, offsetMs }));
+
+    it('returns the last word that has started', () => {
+      expect(findWordIndexAt(words, 0)).toBe(0);
+      expect(findWordIndexAt(words, 450)).toBe(1);
+      expect(findWordIndexAt(words, 5000)).toBe(3);
+    });
+
+    it('returns -1 before the first word', () => {
+      expect(findWordIndexAt(words, -1)).toBe(-1);
+      expect(findWordIndexAt([], 100)).toBe(-1);
+    });
+  });
+});

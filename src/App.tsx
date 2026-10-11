@@ -15,6 +15,8 @@ import { AddToCollectionModal } from './components/AddToCollectionModal';
 import { SuggestedSeriesBanner } from './components/SuggestedSeriesBanner';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import { findSiblingTracks } from './lib/playlist';
+import { warmThumbnails } from './lib/thumbnails';
+import { makePdfCovers } from './lib/pdfCovers';
 import {
   createCollection,
   updateCollection,
@@ -204,6 +206,22 @@ export default function App() {
     }
     void init();
   }, [scanFolders]);
+
+  // Make shelf thumbnails for covers that lack one, in the background, whenever the
+  // set of books changes (first load, a scan). Progress updates leave items alone.
+  useEffect(() => {
+    void warmThumbnails(library.items);
+  }, [library.items]);
+
+  // Draw covers for PDFs that have none, from their first page, in the background.
+  useEffect(() => {
+    void makePdfCovers(library.items, (covers) =>
+      updateLibrary((prev) => ({
+        ...prev,
+        items: prev.items.map((item) => (covers.has(item.id) ? { ...item, coverUrl: covers.get(item.id) } : item)),
+      }))
+    );
+  }, [library.items, updateLibrary]);
 
   /* ----------------------------------------------------------- folders */
 
@@ -762,7 +780,7 @@ export default function App() {
                         progress={resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id]}
                         isPlaying={activeAudioItem?.id === item.id}
                         onOpen={openItem}
-                        onAddToCollection={(it) => setAddToCollectionItem(it)}
+                        onAddToCollection={setAddToCollectionItem}
                       />
                     ))}
                   </div>
@@ -908,7 +926,9 @@ const LibrarySkeleton: React.FC = () => (
   <div className="library-grid pt-2" aria-hidden="true">
     {[...Array(12)].map((_, index) => (
       <div key={index}>
-        <div className="skeleton aspect-[1/1.5] w-full rounded-[3px_var(--radius-md)_var(--radius-md)_3px]" />
+        <div className="book-slot">
+          <div className="skeleton aspect-[1/1.5] w-full rounded-[3px_var(--radius-md)_var(--radius-md)_3px]" />
+        </div>
         <div className="skeleton mt-2.5 h-3 w-4/5" />
         <div className="skeleton mt-1.5 h-2.5 w-3/5" />
       </div>

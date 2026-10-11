@@ -122,7 +122,10 @@ describe('NarrationEngine', () => {
     expect(mockSynthesizeEdge).toHaveBeenCalled();
     expect(mockAudio.play).toHaveBeenCalled();
     expect(mockAudio.src).toBe('blob:mock-bW9ja2F1ZGlv');
-    expect(mockAudio.playbackRate).toBe(1.2);
+    // The speech service synthesises at the chosen speed; playing that audio
+    // faster as well applied the speed twice (1.2x played at 1.44x).
+    expect(mockSynthesizeEdge).toHaveBeenCalledWith(expect.objectContaining({ rate: 1.2 }));
+    expect(mockAudio.playbackRate).toBe(1);
 
     // Initial boundary emitted for starting sentence
     expect(boundaries.length).toBeGreaterThanOrEqual(1);
@@ -241,9 +244,12 @@ describe('NarrationEngine', () => {
     engine.setVoice('en-US-GuyNeural');
     expect(engine.getState().voice).toBe('en-US-GuyNeural');
 
+    mockSynthesizeEdge.mockClear();
     engine.setRate(1.5);
     expect(engine.getState().rate).toBe(1.5);
-    expect(mockAudio.playbackRate).toBe(1.5);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockSynthesizeEdge).toHaveBeenCalledWith(expect.objectContaining({ rate: 1.5 }));
+    expect(mockAudio.playbackRate).toBe(1);
   });
 
   it('stops and cleans up blob URLs and aborts on stop()', async () => {
@@ -258,5 +264,123 @@ describe('NarrationEngine', () => {
     expect(mockAudio.pause).toHaveBeenCalled();
     expect(mockSpeechSynthesis.cancel).toHaveBeenCalled();
     expect(revokedUrls.length).toBeGreaterThan(0);
+  });
+
+  describe('word tracking', () => {
+    const text = 'The cat sat on the mat. Then the dog ran far.';
+    const spoken: Array<[string, number]> = [
+      ['The', 0], ['cat', 300], ['sat', 600], ['on', 900], ['the', 1100], ['mat', 1300],
+      ['Then', 2000], ['the', 2300], ['dog', 2500], ['ran', 2800], ['far', 3100],
+    ];
+    // As the speech service sends it: each sentence entry spans its whole
+    // sentence and starts at the same moment as its first word.
+    const serviceBoundaries = [
+      { type: 'sentence' as const, offsetMs: 0, durationMs: 1700, text: 'The cat sat on the mat.', length: 23 },
+      ...spoken.slice(0, 6).map(([w, t]) => ({ type: 'word' as const, offsetMs: t, durationMs: 250, text: w, length: w.length })),
+      { type: 'sentence' as const, offsetMs: 2000, durationMs: 1400, text: 'Then the dog ran far.', length: 21 },
+      ...spoken.slice(6).map(([w, t]) => ({ type: 'word' as const, offsetMs: t, durationMs: 250, text: w, length: w.length })),
+    ];
+
+    beforeEach(() => {
+      sections = { 0: text };
+      mockSynthesizeEdge.mockResolvedValue({ audioBase64: 'YQ==', mimeType: 'audio/mp3', boundaries: serviceBoundaries });
+    });
+
+    it('reports each spoken word with its length, not the sentence start', async () => {
+      const reported: Array<{ word: string; length: number }> = [];
+      const engine = createTestEngine({
+        onBoundary: (char: number, _section: number, length: number) =>
+          reported.push({ word: text.slice(char, char + length), length }),
+      });
+      // The first word is shown as soon as narration starts, before audio plays.
+      await engine.start({ sectionIndex: 0, voice: 'en-US-JennyNeural' });
+
+      for (const [, t] of spoken) {
+        mockAudio.currentTime = (t + 50) / 1000;
+        mockAudio.ontimeupdate!();
+      }
+
+      expect(reported.map((r) => r.word)).toEqual(spoken.map(([w]) => w));
+    });
+
+    it('reports a word once, however often the audio position is checked', async () => {
+      const reported: number[] = [];
+      const engine = createTestEngine({ onBoundary: (char: number) => reported.push(char) });
+      await engine.start({ sectionIndex: 0, voice: 'en-US-JennyNeural' });
+      reported.length = 0;
+
+      mockAudio.currentTime = 0.35;
+      mockAudio.ontimeupdate!();
+      mockAudio.ontimeupdate!();
+      mockAudio.currentTime = 0.4;
+      mockAudio.ontimeupdate!();
+
+      expect(reported).toEqual([4]); // "cat", reported once
+    });
+
+    it('follows the audio on animation frames, and stops doing so on stop()', async () => {
+      const frames: Array<() => void> = [];
+      const cancelled: number[] = [];
+      const reported: number[] = [];
+      const engine = new NarrationEngine(
+        mockSource,
+        { onBoundary: (char: number) => reported.push(char) },
+        {
+          createAudio: () => mockAudio as unknown as HTMLAudioElement,
+          synthesizeEdge: mockSynthesizeEdge as NarrationEngineDependencies['synthesizeEdge'],
+          base64ToBlobUrl: () => 'blob:x',
+          revokeBlobUrl: () => {},
+          requestFrame: (cb) => frames.push(cb),
+          cancelFrame: (handle) => cancelled.push(handle),
+        }
+      );
+      await engine.start({ sectionIndex: 0, voice: 'en-US-JennyNeural' });
+      reported.length = 0;
+
+      mockAudio.currentTime = 0.65;
+      frames[frames.length - 1](); // one animation frame, no timeupdate
+      expect(reported).toEqual([8]); // "sat"
+
+      engine.stop();
+      expect(cancelled.length).toBe(1);
+    });
+
+    it('ignores sentence events from the system voice and measures words without a length', async () => {
+      const reported: Array<[number, number]> = [];
+      const engine = createTestEngine({
+        onBoundary: (char: number, _section: number, length: number) => reported.push([char, length]),
+      });
+      await engine.start({ sectionIndex: 0, voice: LOCAL_VOICE_ID });
+      const utterance = mockSpeechSynthesis.speak.mock.calls[0][0] as SpeechSynthesisUtterance;
+      reported.length = 0;
+
+      utterance.onboundary!({ name: 'sentence', charIndex: 24, charLength: 0 } as SpeechSynthesisEvent);
+      utterance.onboundary!({ name: 'word', charIndex: 4, charLength: 3 } as SpeechSynthesisEvent);
+      utterance.onboundary!({ name: 'word', charIndex: 8, charLength: 0 } as SpeechSynthesisEvent);
+
+      expect(reported).toEqual([[4, 3], [8, 3]]);
+    });
+
+    it('stops following the online clip when playback fails and the system voice takes over', async () => {
+      const frames: Array<() => void> = [];
+      const cancelled: number[] = [];
+      mockAudio.play = vi.fn().mockRejectedValue(new Error('autoplay blocked'));
+      const engine = new NarrationEngine(mockSource, {}, {
+        createAudio: () => mockAudio as unknown as HTMLAudioElement,
+        speechSynthesis: mockSpeechSynthesis as unknown as SpeechSynthesis,
+        createSpeechUtterance: (t: string) => ({ text: t, rate: 1 } as unknown as SpeechSynthesisUtterance),
+        synthesizeEdge: mockSynthesizeEdge as NarrationEngineDependencies['synthesizeEdge'],
+        base64ToBlobUrl: () => 'blob:x',
+        revokeBlobUrl: () => {},
+        requestFrame: (cb) => frames.push(cb),
+        cancelFrame: (handle) => cancelled.push(handle),
+      });
+
+      await engine.start({ sectionIndex: 0, voice: 'en-US-JennyNeural' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
+      expect(cancelled.length).toBeGreaterThanOrEqual(1);
+    });
   });
 });

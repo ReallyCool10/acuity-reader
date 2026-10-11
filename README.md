@@ -26,7 +26,7 @@ can be read as description rather than aspiration.
 | EPUB reading, spine-ordered with embedded images | Working |
 | PDF reading, with outline, zoom and continuous scroll | Working |
 | In-book full-text search | Working |
-| Read-aloud narration with sentence highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
+| Read-aloud narration with word-by-word highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
 | Bookmarks, with navigation | Working |
 | Sleep timer | Working |
 | Companion pairing of text and audio editions | Working (matched on normalised title) |
@@ -51,6 +51,25 @@ to remain enabled while still streaming audio and covers off local disk.
 
 The handler implements HTTP range requests, without which `<audio>` cannot seek inside a
 multi-hundred-megabyte `.m4b` — it can only stream from the beginning.
+
+### Cover thumbnails
+
+Shelves show covers a few hundred pixels tall, but cover files are often 1,500–2,500 pixels
+tall, and decoding them at full size left empty slots behind a fast scroll. Shelves therefore
+request `acuity://thumb/<path>`. A Web Worker in the renderer shrinks each cover to fit 600 pixels
+in the background, off every UI thread, and the main process keeps the result in a `thumbs`
+folder in `userData`, keyed by the cover's path, size and modification time. A cover without a
+thumbnail yet is served at full size, and thumbnails for covers no longer in the library are
+deleted at startup. Deleting the folder is safe; it is rebuilt.
+
+### Where covers come from
+
+In order: an image beside the book with the same name (`Dune.jpg` next to `Dune.epub`); the art
+embedded in an audiobook; for an EPUB, the cover the book itself declares in its package document
+(never simply the first image in the archive, which is often a publisher's logo); a `cover.jpg`
+or `folder.jpg` in a folder holding a single work; and, for a PDF with none of these, its first
+page, drawn in the background. EPUB covers chosen by earlier versions are corrected on the next
+**Rescan library**.
 
 ### Data
 

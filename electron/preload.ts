@@ -23,6 +23,14 @@ export interface ElectronAPI {
   loadLibrary: () => Promise<LibraryState>;
   saveLibrary: (data: LibraryState) => Promise<boolean>;
   readBytes: (path: string) => Promise<Uint8Array | null>;
+  /** Bytes [start, end) of a file and its total size, for reading parts of large PDFs. */
+  readRange: (path: string, start: number, end: number) => Promise<{ bytes: Uint8Array; size: number } | null>;
+  /** Which of these cover files still need a shelf thumbnail. */
+  thumbnailsMissing: (coverPaths: string[]) => Promise<string[]>;
+  /** Keep a shelf thumbnail (JPEG bytes) made for this cover file. */
+  saveThumbnail: (coverPath: string, jpeg: Uint8Array) => Promise<boolean>;
+  /** Keep a cover drawn from a PDF's first page; resolves to the saved cover's path. */
+  savePdfCover: (pdfPath: string, jpeg: Uint8Array) => Promise<string | null>;
   updateThumbar: (isPlaying: boolean) => void;
   getThemeInfo: () => Promise<ThemeInfo>;
   setThemeSource: (source: AppTheme) => Promise<ThemeInfo>;
@@ -60,6 +68,10 @@ const api: ElectronAPI = {
   loadLibrary: () => ipcRenderer.invoke('storage:load'),
   saveLibrary: (data) => ipcRenderer.invoke('storage:save', data),
   readBytes: (filePath) => ipcRenderer.invoke('file:readBytes', filePath),
+  readRange: (filePath, start, end) => ipcRenderer.invoke('file:readRange', filePath, start, end),
+  thumbnailsMissing: (coverPaths) => ipcRenderer.invoke('thumbs:missing', coverPaths),
+  saveThumbnail: (coverPath, jpeg) => ipcRenderer.invoke('thumbs:save', coverPath, jpeg),
+  savePdfCover: (pdfPath, jpeg) => ipcRenderer.invoke('covers:savePdfCover', pdfPath, jpeg),
   updateThumbar: (isPlaying) => ipcRenderer.send('thumbar:update', { isPlaying }),
   getThemeInfo: () => ipcRenderer.invoke('system:getThemeInfo'),
   setThemeSource: (source: 'system' | 'dark' | 'light') => ipcRenderer.invoke('system:setThemeSource', source),

@@ -1,5 +1,6 @@
 export interface CacheCandidate {
   title?: string;
+  format?: string;
   coverUrl?: string;
   fileSize: number;
   fileModifiedAt?: number;
@@ -19,8 +20,10 @@ export interface FileStatLike {
  * 1. Missing cached item -> invalid (cache miss)
  * 2. Corrupted shadow-library title -> invalid (force re-extraction)
  * 3. Generic cover art (e.g. folder.jpg, cover.jpg) -> invalid (force re-extraction)
- * 4. File size differs -> invalid
- * 5. Modification time differs by 1000ms or more -> invalid
+ * 4. EPUB cover from the old filename guess (covers/<md5>.jpg) -> invalid, so it is
+ *    extracted again from the book's own cover declaration (epubCover.ts)
+ * 5. File size differs -> invalid
+ * 6. Modification time differs by 1000ms or more -> invalid
  */
 export function isCacheHit(
   cached: CacheCandidate | undefined | null,
@@ -35,6 +38,10 @@ export function isCacheHit(
   const hasGenericCover =
     Boolean(cached.coverUrl && /(?:cover|folder|front|albumart)\.(?:jpe?g|png|webp)$/i.test(cached.coverUrl));
   if (hasGenericCover) return false;
+
+  const hasGuessedEpubCover =
+    cached.format === 'epub' && Boolean(cached.coverUrl && /[\\/][0-9a-f]{32}\.jpg$/i.test(cached.coverUrl));
+  if (hasGuessedEpubCover) return false;
 
   if (cached.fileSize !== stat.size) return false;
 
