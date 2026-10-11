@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isCacheHit, type CacheCandidate, type FileStatLike } from './scanCache';
+import { findCacheHit, isCacheHit, type CacheCandidate, type FileStatLike } from './scanCache';
 
 describe('electron/scanCache - isCacheHit', () => {
   const baseStat: FileStatLike = {
@@ -145,5 +145,26 @@ describe('electron/scanCache - isCacheHit', () => {
       fileSize: 1048576,
     };
     expect(isCacheHit(noDateCandidate, baseStat)).toBe(false);
+  });
+});
+
+describe('electron/scanCache - findCacheHit', () => {
+  const trackStat: FileStatLike = { size: 30_000_000, mtimeMs: 1700000000000 };
+  const trackRecord: CacheCandidate = { title: 'Part 1', fileSize: 30_000_000, fileModifiedAt: 1700000000000 };
+
+  it("uses a track's own record when the library holds its grouped audiobook", () => {
+    // Saved under the first track's path, with the size of all three tracks.
+    const groupedBook: CacheCandidate = { title: 'The Long Book', fileSize: 90_000_000, fileModifiedAt: 1700000000000 };
+    expect(findCacheHit([groupedBook, trackRecord], trackStat)).toBe(trackRecord);
+  });
+
+  it("prefers the library's own item, which carries the user's edits", () => {
+    const edited: CacheCandidate = { ...trackRecord, title: 'Edited title' };
+    expect(findCacheHit([edited, trackRecord], trackStat)).toBe(edited);
+  });
+
+  it('finds nothing when the file has changed', () => {
+    expect(findCacheHit([trackRecord], { ...trackStat, size: 1 })).toBeUndefined();
+    expect(findCacheHit([undefined, null], trackStat)).toBeUndefined();
   });
 });

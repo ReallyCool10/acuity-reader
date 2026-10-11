@@ -21,7 +21,8 @@ import * as mm from 'music-metadata';
 import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
 import { computeStableId, migrateLibraryState } from './id';
-import { isCacheHit } from './scanCache';
+import { findCacheHit } from './scanCache';
+import { createScanStore, type ScanStore } from './scanStore';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
@@ -661,6 +662,14 @@ interface ScannedItem {
 /** In-memory cache of scanned items to avoid re-parsing tags and covers on rescan. */
 const itemMetadataCache = new Map<string, ScannedItem>();
 
+let scanStore: ScanStore<ScannedItem> | null = null;
+
+/** Every file the scanner has read, kept across restarts (scanStore.ts). */
+function getScanStore(): ScanStore<ScannedItem> {
+  scanStore ??= createScanStore<ScannedItem>(path.join(app.getPath('userData'), 'scan_cache.json'));
+  return scanStore;
+}
+
 async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: (count: number) => void) {
   let entries: fs.Dirent[];
   try {
@@ -688,9 +697,11 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       const stats = await fs.promises.stat(fullPath);
 
       // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
-      const cached = itemMetadataCache.get(fullPath);
-      if (isCacheHit(cached, stats)) {
-        items.push({ ...cached!, fileModifiedAt: stats.mtimeMs });
+      // The saved library's item first (it carries the user's edits), then the
+      // scanner's own record, which also covers each file of a grouped audiobook.
+      const cached = findCacheHit([itemMetadataCache.get(fullPath), getScanStore().get(fullPath)], stats);
+      if (cached) {
+        items.push({ ...cached, fileModifiedAt: stats.mtimeMs });
         onProgress(items.length);
         continue;
       }
@@ -788,6 +799,7 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
 ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
   registerAllowedRoot(folderPath);
   registerAllowedRoot(getCoversDir());
+  await getScanStore().load();
 
   const items: ScannedItem[] = [];
   let lastSent = 0;
@@ -803,6 +815,10 @@ ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
 
   // Pair companion audio and text editions.
   pairCompanions(items);
+
+  const store = getScanStore();
+  store.replaceFolder(folderPath, items);
+  await store.save().catch((err) => logError('scan-cache-save', err));
 
   return items;
 });
