@@ -117,6 +117,9 @@ Two further caveats about the online engine:
 The bundled MCP server communicates over **stdio only** — it opens no network port and is reachable
 solely by a local process that launches it.
 
+Changes made through the MCP server (progress, bookmarks, collections) appear in the app while it
+is open, and are merged with the app's own changes rather than saved over.
+
 ---
 
 ## Getting started

@@ -86,6 +86,12 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     opening a large scanned book does not copy the whole file. Script in the renderer cannot read
     `acuity://` responses: the page's origin is `file://`, so CORS blocks fetch/XHR (images and
     media elements are unaffected).
+18. **The library file has two writers.** The MCP server edits `acuity_library.json` directly
+    (progress, bookmarks, collections). The main process notices another process's write (stamp
+    check before every write, plus a watch) and sends it to the renderer, which merges it with
+    `mergeExternalLibraryChanges` against the last saved state and saves again. Every save carries
+    the renderer's `libraryGeneration`; saves from before a merge are dropped. Never write the
+    library from a state that has not merged the latest outside edit.
 
 ## UI conventions
 

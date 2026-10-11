@@ -833,6 +833,75 @@ function getStorageFilePath() {
 let pendingWrite: unknown = null;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 
+/*
+ * Edits made outside the app.
+ *
+ * The MCP server (mcp-server/) edits the library file directly: progress,
+ * bookmarks, collections. The app's next save, about once a second during
+ * playback, used to write its own copy straight over them. So this process
+ * remembers what it last wrote (`libraryBase`) and the file's stamp afterwards;
+ * any other stamp means another process wrote the file. That edit goes to the
+ * renderer, which merges it (src/lib/libraryMerge.ts) and saves again. Saves
+ * sent before it had merged carry an older `libraryGeneration` and are dropped,
+ * so none can undo the edit.
+ */
+let libraryBase: unknown = null;
+let knownStamp: { mtimeMs: number; size: number } | null = null;
+let libraryGeneration = 0;
+let outsideEditCheck: Promise<boolean> = Promise.resolve(false);
+let watchingLibraryFile = false;
+
+async function stampOf(file: string): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    const { mtimeMs, size } = await fs.promises.stat(file);
+    return { mtimeMs, size };
+  } catch {
+    return null;
+  }
+}
+
+/** Hand any edit another process made to the library file to the renderer. True if there was one. */
+function checkForOutsideEdit(): Promise<boolean> {
+  outsideEditCheck = outsideEditCheck.then(
+    async () => {
+      const file = getStorageFilePath();
+      const stamp = await stampOf(file);
+      const changed = stamp && (!knownStamp || stamp.mtimeMs !== knownStamp.mtimeMs || stamp.size !== knownStamp.size);
+      if (!changed) return false;
+
+      let external: unknown;
+      try {
+        external = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      } catch {
+        return false; // Unreadable for now; look again on the next check.
+      }
+      knownStamp = stamp;
+      libraryGeneration += 1;
+      // Saves already queued predate the merge; the renderer sends a merged one.
+      pendingWrite = null;
+      if (writeTimer) {
+        clearTimeout(writeTimer);
+        writeTimer = null;
+      }
+      mainWindow?.webContents.send('library:outside-edit', {
+        base: libraryBase,
+        external,
+        generation: libraryGeneration,
+      });
+      libraryBase = external;
+      return true;
+    },
+    () => false
+  );
+  return outsideEditCheck;
+}
+
+function watchLibraryFile() {
+  if (watchingLibraryFile) return;
+  watchingLibraryFile = true;
+  fs.watchFile(getStorageFilePath(), { interval: 1000 }, () => void checkForOutsideEdit());
+}
+
 /**
  * Write via a temp file then rename.
  *
@@ -844,6 +913,8 @@ async function writeStoreAtomically(data: unknown) {
   const temp = `${target}.${process.pid}.tmp`;
   await fs.promises.writeFile(temp, JSON.stringify(data), 'utf8');
   await fs.promises.rename(temp, target);
+  knownStamp = await stampOf(target);
+  libraryBase = data;
 }
 
 async function flushStore() {
@@ -851,6 +922,9 @@ async function flushStore() {
     clearTimeout(writeTimer);
     writeTimer = null;
   }
+  if (pendingWrite === null) return;
+  // An edit another process made since our last write is merged first, not written over.
+  if (await checkForOutsideEdit()) return;
   if (pendingWrite === null) return;
 
   const data = pendingWrite;
@@ -863,6 +937,10 @@ async function flushStore() {
 }
 
 ipcMain.handle('storage:load', async () => {
+  // A (re)loaded renderer starts from what is on disk now.
+  libraryGeneration = 0;
+  knownStamp = await stampOf(getStorageFilePath());
+  watchLibraryFile();
   try {
     const filePath = getStorageFilePath();
     if (fs.existsSync(filePath)) {
@@ -920,10 +998,12 @@ ipcMain.handle('storage:load', async () => {
       registerAllowedRoot(getCoversDir());
       // Drop shelf thumbnails no book uses any more.
       void getThumbnails().prune(coverPathsOf((migrated.items || []) as ScannedItem[]));
-      return {
+      const loaded = {
         ...migrated,
         collections: Array.isArray(migrated.collections) ? migrated.collections : [],
       };
+      libraryBase = loaded;
+      return loaded;
     }
   } catch (err) {
     logError('storage-load', err);
@@ -935,7 +1015,9 @@ ipcMain.handle('storage:load', async () => {
     if (copy) logError('storage-load', `Library file could not be read; a copy was kept at ${copy}`);
   }
   registerAllowedRoot(getCoversDir());
-  return { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
+  const empty = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
+  libraryBase = empty;
+  return empty;
 });
 
 /**
@@ -945,7 +1027,9 @@ ipcMain.handle('storage:load', async () => {
  * means steady listening costs one write per second instead of one per
  * `timeupdate` event, each of which serialises the whole library.
  */
-ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }) => {
+ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }, generation?: number) => {
+  // Sent before the renderer merged the latest outside edit: writing it would undo that edit.
+  if ((generation ?? 0) !== libraryGeneration) return true;
   for (const folder of data?.folders ?? []) registerAllowedRoot(folder);
   for (const item of data?.items ?? []) {
     if (item.filePath) {
