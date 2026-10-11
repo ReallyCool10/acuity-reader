@@ -491,7 +491,11 @@ ipcMain.handle('dialog:pickFolder', async () => {
     title: 'Select your books and audiobooks folder',
     properties: ['openDirectory'],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled || !result.filePaths[0]) return null;
+  // The user chose this folder, so the app may read it. This and the saved
+  // library are the only ways a folder becomes readable (see scanner:scanFolder).
+  registerAllowedRoot(result.filePaths[0]);
+  return result.filePaths[0];
 });
 
 ipcMain.handle('shell:revealInFolder', (_event, filePath: string) => {
@@ -805,7 +809,13 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
 }
 
 ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
-  registerAllowedRoot(folderPath);
+  // The renderer names the folder but cannot widen what the app reads: script
+  // in the page (a sanitiser miss in a book, say) could otherwise register C:\
+  // and read any file through file:readBytes.
+  if (typeof folderPath !== 'string' || !isAllowedPath(folderPath)) {
+    logError('scanner', `Refused to scan a folder the user has not chosen: ${String(folderPath)}`);
+    return [];
+  }
   registerAllowedRoot(getCoversDir());
   await getScanStore().load();
 
@@ -1037,7 +1047,11 @@ ipcMain.handle('storage:load', async () => {
 ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }, generation?: number) => {
   // Sent before the renderer merged the latest outside edit: writing it would undo that edit.
   if ((generation ?? 0) !== libraryGeneration) return true;
-  for (const folder of data?.folders ?? []) registerAllowedRoot(folder);
+  // Folders are granted by the folder picker, not by saving. Keep a folder the
+  // user never chose out of the file too, or it would be granted at next launch.
+  if (Array.isArray(data?.folders)) {
+    data = { ...data, folders: data.folders.filter((folder) => typeof folder === 'string' && isAllowedPath(folder)) };
+  }
   for (const item of data?.items ?? []) {
     if (item.filePath) {
       itemMetadataCache.set(item.filePath, item);

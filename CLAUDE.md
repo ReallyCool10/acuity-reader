@@ -35,6 +35,9 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 1. **No `file://` in the renderer.** Local media is served through the `acuity://` scheme
    registered in `electron/main.ts`, which validates every path against the user's registered
    library folders. This is what lets `webSecurity` stay enabled — do not disable it.
+   A folder becomes readable only when the user picks it (`dialog:pickFolder`) or it is in the
+   saved library. Never register a folder because the renderer asked (`scanner:scanFolder`,
+   `storage:save`): script in the page could then read any file on the machine.
 2. **Path containment is checked with `path.relative`, not string prefixes.** A prefix test
    treats `/books-private` as inside `/books`.
 3. **Range requests are required** in the media handler. Without them `<audio>` cannot seek
