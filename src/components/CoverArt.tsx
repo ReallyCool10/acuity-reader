@@ -12,13 +12,15 @@ interface CoverArtProps {
   src: string;
   /** Called once the image is decoded and can be shown, or has failed. */
   onShown: (shown: ShownCover) => void;
+  /** A badge sits in a top corner; keep the jacket's label row clear of it. */
+  belowBadges?: boolean;
 }
 
 /**
  * The art inside a `.book-cover`: the item's own cover at its natural shape,
  * or a generated jacket when it has none or the image fails to load.
  */
-export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, src, onShown }) => {
+export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, src, onShown, belowBadges = false }) => {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -53,7 +55,7 @@ export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, src, onS
     if (img?.complete && img.naturalWidth > 0) reveal(img);
   }, [reveal]);
 
-  if (!src || failed) return <Jacket item={item} displayTitle={displayTitle} />;
+  if (!src || failed) return <Jacket item={item} displayTitle={displayTitle} belowBadges={belowBadges} />;
 
   return (
     <img
@@ -69,7 +71,11 @@ export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, src, onS
   );
 };
 
-const Jacket: React.FC<{ item: MediaItem; displayTitle: string }> = ({ item, displayTitle }) => {
+const Jacket: React.FC<{ item: MediaItem; displayTitle: string; belowBadges: boolean }> = ({
+  item,
+  displayTitle,
+  belowBadges,
+}) => {
   const theme = themeForTitle(item.title);
   const Icon = item.mediaType === 'audio' ? Headphones : BookOpen;
 
@@ -83,7 +89,7 @@ const Jacket: React.FC<{ item: MediaItem; displayTitle: string }> = ({ item, dis
         className="pointer-events-none absolute inset-2 rounded-[3px] border"
         style={{ borderColor: `${theme.accent}33` }}
       />
-      <div className="relative flex items-center justify-between">
+      <div className={`relative flex items-center justify-between ${belowBadges ? 'mt-5' : ''}`}>
         <span
           className="text-[9px] font-semibold uppercase tracking-[0.14em]"
           style={{ color: theme.accent }}

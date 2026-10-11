@@ -52,7 +52,14 @@ export const BookCard = React.memo(function BookCard({
       <button type="button" className="book-open" onClick={() => onOpen(item)} aria-label={label}>
         <div className="book-slot">
           <div className="book-cover" data-media-type={item.mediaType}>
-            <CoverArt key={src} item={item} displayTitle={displayTitle} src={src} onShown={onShown} />
+            <CoverArt
+              key={src}
+              item={item}
+              displayTitle={displayTitle}
+              src={src}
+              onShown={onShown}
+              belowBadges={Boolean(item.companionPath) || (item.tracks?.length ?? 0) > 1}
+            />
 
             {item.companionPath ? (
               <span

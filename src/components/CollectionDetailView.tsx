@@ -222,6 +222,7 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
                 <div key={work.orderIndex} className="book-card group relative">
                   <WorkCover
                     item={item}
+                    belowBadges={isSeries || work.isDual}
                     onClick={() => {
                       if (work.bookItem) onOpenItem(work.bookItem);
                       else onOpenItem(item);
@@ -369,9 +370,10 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
  */
 const WorkCover: React.FC<{
   item: MediaItem;
+  belowBadges: boolean;
   onClick: () => void;
   children: React.ReactNode;
-}> = ({ item, onClick, children }) => {
+}> = ({ item, belowBadges, onClick, children }) => {
   const { src, ready, aspect, onShown } = useCoverShape(item);
   const displayTitle = cleanTitleString(item.title) || item.title;
 
@@ -382,7 +384,14 @@ const WorkCover: React.FC<{
       style={{ '--cover-aspect': aspect } as React.CSSProperties}
     >
       <div className="book-cover cursor-pointer" data-media-type={item.mediaType} onClick={onClick}>
-        <CoverArt key={src} item={item} displayTitle={displayTitle} src={src} onShown={onShown} />
+        <CoverArt
+          key={src}
+          item={item}
+          displayTitle={displayTitle}
+          src={src}
+          onShown={onShown}
+          belowBadges={belowBadges}
+        />
         {children}
       </div>
     </div>
