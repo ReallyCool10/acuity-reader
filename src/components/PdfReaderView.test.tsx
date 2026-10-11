@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { PdfReaderView } from './PdfReaderView';
+import { loadPdfDocument, openPdfByRanges } from '../lib/pdf';
 import type { MediaItem } from '../types';
 
 vi.mock('../lib/pdf', () => ({
@@ -27,6 +28,8 @@ vi.mock('../lib/pdf', () => ({
     cancel: vi.fn(),
   }),
   extractPdfOutline: vi.fn().mockResolvedValue([]),
+  // No range reader in most tests, so the reader takes its whole-file fallback.
+  openPdfByRanges: vi.fn().mockResolvedValue(null),
 }));
 
 describe('PdfReaderView', () => {
@@ -88,6 +91,34 @@ describe('PdfReaderView', () => {
       backBtn.click();
     });
     expect(defaultProps.onClose).toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('reads the file by ranges rather than whole when ranges are available', async () => {
+    const readRange = vi.fn().mockResolvedValue({ bytes: new Uint8Array([1]), size: 1 });
+    const readBytes = vi.fn();
+    (window as unknown as { electronAPI: unknown }).electronAPI = { readRange, readBytes };
+    const doc = await vi.mocked(loadPdfDocument).getMockImplementation()!(new Uint8Array());
+    vi.mocked(openPdfByRanges).mockResolvedValueOnce({ promise: Promise.resolve(doc) } as never);
+
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<PdfReaderView {...defaultProps} />);
+    });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+
+    expect(container.textContent).toContain('Page 1 of 5');
+    // The reader hands pdf.js a reader bound to this book's file.
+    const [boundReader] = vi.mocked(openPdfByRanges).mock.calls[0];
+    await boundReader(0, 10);
+    expect(readRange).toHaveBeenCalledWith(mockItem.filePath, 0, 10);
+    expect(readBytes).not.toHaveBeenCalled();
+    expect(loadPdfDocument).not.toHaveBeenCalled();
 
     await act(async () => {
       root.unmount();

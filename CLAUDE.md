@@ -80,9 +80,12 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 16. **Covers come from what a book declares.** EPUB covers are found by `findEpubCover`
     (`electron/epubCover.ts`): the OPF's cover-image property, cover meta, guide or first page,
     never the first image in the archive. PDFs without art get page 1 drawn by
-    `src/lib/pdfCovers.ts`, which reads only the byte ranges pdf.js asks for over IPC
-    (`file:readRange`). Script in the renderer cannot read `acuity://` responses: the page's origin
-    is `file://`, so CORS blocks fetch/XHR (images and media elements are unaffected).
+    `src/lib/pdfCovers.ts`.
+17. **PDFs are opened by byte range.** The reader and PDF covers use `openPdfByRanges`
+    (`src/lib/pdf.ts`), which reads only the ranges pdf.js asks for over IPC (`file:readRange`), so
+    opening a large scanned book does not copy the whole file. Script in the renderer cannot read
+    `acuity://` responses: the page's origin is `file://`, so CORS blocks fetch/XHR (images and
+    media elements are unaffected).
 
 ## UI conventions
 

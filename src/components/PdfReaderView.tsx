@@ -5,6 +5,7 @@ import {
   extractPdfPageText,
   getPdfInfo,
   loadPdfDocument,
+  openPdfByRanges,
   renderPdfPage,
   type PdfDocumentInfo,
 } from '../lib/pdf';
@@ -118,11 +119,16 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
       setStatus('loading');
       try {
         let doc: pdfjsLib.PDFDocumentProxy;
-        const streamUrl = `acuity://media/${encodeURIComponent(item.filePath)}`;
-        try {
-          doc = await loadPdfDocument(streamUrl);
-        } catch {
-          const bytes = await window.electronAPI?.readBytes(item.filePath);
+        // Read only the parts of the file each page needs, so a large scanned book opens
+        // as quickly as a small one. Whole-file bytes remain the fallback.
+        const api = window.electronAPI;
+        const task = api?.readRange
+          ? await openPdfByRanges((start, end) => api.readRange(item.filePath, start, end))
+          : null;
+        if (task) {
+          doc = await task.promise;
+        } else {
+          const bytes = await api?.readBytes(item.filePath);
           if (bytes && bytes.byteLength > 0) {
             doc = await loadPdfDocument(bytes);
           } else {
