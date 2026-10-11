@@ -80,7 +80,13 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 - `src/App.css` must stay imported from `src/main.tsx`. Without that import Vite emits no CSS
   bundle and every utility class in the app silently does nothing.
 - Anything clickable is a real `<button>` with an accessible name. Cards are buttons, not
-  `<div onClick>`.
+  `<div onClick>`. A button may not contain another button, so a control drawn on a book cover
+  (such as "Add to collection") sits outside the card's open button, in the `.cover-frame`
+  overlay that mirrors the cover's box.
+- Covers are never cropped or padded to a fixed shape. Each card reserves the same shelf slot and
+  the cover stands at the bottom of it at its own shape (`--cover-aspect`, clamped by
+  `MIN_COVER_ASPECT`/`MAX_COVER_ASPECT` in `src/lib/coverArt.ts`), so every book shares one
+  shelf line. Render cover art through `CoverArt`, which reports the image's shape.
 - Honour `prefers-reduced-motion`; the token layer already collapses durations.
 - Do not reintroduce magic pixel offsets for the Windows caption buttons — use the
   `env(titlebar-area-*)` variables with a fallback.

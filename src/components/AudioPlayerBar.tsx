@@ -26,7 +26,7 @@ import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState } from '../hooks/usePersistentState';
 import { useDismissable } from '../hooks/useDismissable';
 import { Scrubber } from './Scrubber';
-import { themeForTitle } from './BookCard';
+import { themeForTitle } from '../lib/coverArt';
 import { getTrackForTime } from '../lib/audiobookGrouping';
 
 export interface AudioPlayerBarProps {

@@ -908,7 +908,9 @@ const LibrarySkeleton: React.FC = () => (
   <div className="library-grid pt-2" aria-hidden="true">
     {[...Array(12)].map((_, index) => (
       <div key={index}>
-        <div className="skeleton aspect-[1/1.5] w-full rounded-[3px_var(--radius-md)_var(--radius-md)_3px]" />
+        <div className="book-slot">
+          <div className="skeleton aspect-[1/1.5] w-full rounded-[3px_var(--radius-md)_var(--radius-md)_3px]" />
+        </div>
         <div className="skeleton mt-2.5 h-3 w-4/5" />
         <div className="skeleton mt-1.5 h-2.5 w-3/5" />
       </div>

@@ -20,9 +20,10 @@ import {
   getUnresolvedMemberCount,
   type CollectionWorkItem,
 } from '../lib/collections';
-import { coverUrl } from '../lib/media';
+import { DEFAULT_COVER_ASPECT } from '../lib/coverArt';
 import { resolveAudiobookProgress } from '../lib/audiobookGrouping';
 import { CollectionMemberPickerModal } from './CollectionMemberPickerModal';
+import { CoverArt } from './CoverArt';
 
 interface CollectionDetailViewProps {
   collection: Collection;
@@ -210,7 +211,6 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
           <div className="library-grid">
             {resolvedWorks.map((work, index) => {
               const item = work.primaryItem;
-              const url = coverUrl(item);
               const itemProgress =
                 (resolveAudiobookProgress(item, progress) ?? progress[item.id])?.percent ?? 0;
               const isPlaying =
@@ -220,40 +220,13 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
 
               return (
                 <div key={work.orderIndex} className="book-card group relative">
-                  <div
-                    className="book-cover cursor-pointer"
-                    data-media-type={item.mediaType}
+                  <WorkCover
+                    item={item}
                     onClick={() => {
                       if (work.bookItem) onOpenItem(work.bookItem);
                       else onOpenItem(item);
                     }}
                   >
-                    {url ? (
-                      <>
-                        <img
-                          src={url}
-                          alt=""
-                          aria-hidden="true"
-                          className="cover-backdrop"
-                        />
-                        <img
-                          src={url}
-                          alt=""
-                          loading="lazy"
-                          decoding="async"
-                          className="cover-image"
-                          data-loaded="true"
-                        />
-                      </>
-                    ) : (
-                      <div className="flex h-full w-full flex-col items-center justify-center bg-[var(--surface-raised)] p-3 text-center">
-                        <BookOpen className="h-8 w-8 text-[var(--text-tertiary)] opacity-40" />
-                        <span className="mt-2 text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-                          {item.format}
-                        </span>
-                      </div>
-                    )}
-
                     {/* Order Badge (surfaced only for series) */}
                     {isSeries && (
                       <span className="absolute left-2 top-2 z-[3] flex h-5 min-w-[20px] items-center justify-center rounded-[4px] border border-white/20 bg-black/75 px-1.5 text-[10px] font-bold text-white shadow-md backdrop-blur-md">
@@ -325,7 +298,7 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
                     >
                       <X className="h-3 w-3" />
                     </button>
-                  </div>
+                  </WorkCover>
 
                   {/* Metadata and Format Action Buttons */}
                   <div className="mt-2.5 min-w-0">
@@ -386,6 +359,31 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
           onToggleMember={handleToggleMember}
         />
       )}
+    </div>
+  );
+};
+
+/**
+ * A member's cover standing on the shelf at its own shape, like the library
+ * grid. Its controls (order badge, reorder, remove) are children drawn on it.
+ */
+const WorkCover: React.FC<{
+  item: MediaItem;
+  onClick: () => void;
+  children: React.ReactNode;
+}> = ({ item, onClick, children }) => {
+  const [aspect, setAspect] = useState<number | null>(null);
+  const displayTitle = cleanTitleString(item.title) || item.title;
+
+  return (
+    <div
+      className="book-slot"
+      style={{ '--cover-aspect': aspect ?? DEFAULT_COVER_ASPECT[item.mediaType] } as React.CSSProperties}
+    >
+      <div className="book-cover cursor-pointer" data-media-type={item.mediaType} onClick={onClick}>
+        <CoverArt item={item} displayTitle={displayTitle} onAspectChange={setAspect} />
+        {children}
+      </div>
     </div>
   );
 };
