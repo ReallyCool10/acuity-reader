@@ -20,6 +20,7 @@ import crypto from 'node:crypto';
 import * as mm from 'music-metadata';
 import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
+import { parseByteRange } from './byteRange';
 import { computeStableId, migrateLibraryState } from './id';
 import { findCacheHit } from './scanCache';
 import { createScanStore, type ScanStore } from './scanStore';
@@ -166,28 +167,23 @@ async function serveFile(request: Request): Promise<Response> {
   }
 
   const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-  const rangeHeader = request.headers.get('Range');
-  const rangeMatch = rangeHeader?.match(/bytes=(\d*)-(\d*)/);
+  const range = parseByteRange(request.headers.get('Range'), stat.size);
 
-  if (rangeMatch) {
-    const start = rangeMatch[1] ? Number(rangeMatch[1]) : 0;
-    const end = rangeMatch[2] ? Number(rangeMatch[2]) : stat.size - 1;
+  if (range === 'unsatisfiable') {
+    return new Response('Range not satisfiable', {
+      status: 416,
+      headers: { 'Content-Range': `bytes */${stat.size}` },
+    });
+  }
 
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= stat.size) {
-      return new Response('Range not satisfiable', {
-        status: 416,
-        headers: { 'Content-Range': `bytes */${stat.size}` },
-      });
-    }
-
-    const clampedEnd = Math.min(end, stat.size - 1);
-    const stream = fs.createReadStream(filePath, { start, end: clampedEnd });
+  if (range) {
+    const stream = fs.createReadStream(filePath, { start: range.start, end: range.end });
     return new Response(Readable.toWeb(stream) as ReadableStream, {
       status: 206,
       headers: {
         'Accept-Ranges': 'bytes',
-        'Content-Length': String(clampedEnd - start + 1),
-        'Content-Range': `bytes ${start}-${clampedEnd}/${stat.size}`,
+        'Content-Length': String(range.end - range.start + 1),
+        'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
         'Content-Type': contentType,
       },
     });
