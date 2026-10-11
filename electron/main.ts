@@ -377,8 +377,15 @@ function createMainWindow() {
 
   // Keep navigation inside the app; open real links in the user's browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) shell.openExternal(url);
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // The window never leaves the app's page. A link in a book that navigated it
+  // would replace the whole interface (with chrome-error:// for a path that does
+  // not exist); the reader follows book links itself. A reload is still allowed.
+  mainWindow.webContents.on('will-navigate', (event) => {
+    if (event.url !== mainWindow?.webContents.getURL()) event.preventDefault();
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {

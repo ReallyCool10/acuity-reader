@@ -46,7 +46,13 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
    layout and returns null for a document that was never attached to a view. Use the tree walk in
    `extractText`. A regression here silently produces empty chapters.
 7. **Chapter HTML must stay sanitised** before it reaches `dangerouslySetInnerHTML`. Sanitisation
-   lives in `parseEpub`; do not render EPUB markup that has not been through it.
+   lives in `parseEpub`; do not render EPUB markup that has not been through it. Script in the
+   renderer can reach the preload bridge, so a sanitiser miss is serious. URL schemes are read
+   with `schemeOf`, which ignores whitespace and control characters as browsers do
+   (`java&#9;script:` is javascript); never test a URL attribute with a plain prefix check.
+   Links inside a book must not navigate the page: `parseEpub` rewrites them to
+   `data-book-target` and the reader follows them. The main process also refuses every
+   navigation of the window (`will-navigate`).
 8. **Blob URLs minted for embedded images must be revoked** when the reader unmounts.
 9. **Modules under `electron/` must not import `electron` at module scope** unless they genuinely
    need the app object at import time. A static `import { app } from 'electron'` forces anything

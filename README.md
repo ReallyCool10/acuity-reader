@@ -84,8 +84,12 @@ they are per-install chrome rather than user content.
 
 `src/lib/epub.ts` reads the archive in **spine order** taken from the OPF package document —
 not zip entry order, which is arbitrary and interleaves front matter with chapters. Chapter
-markup is sanitised (scripts, styles, remote resources and inline event handlers removed) and
-embedded images are rewritten to blob URLs drawn from inside the archive.
+markup is sanitised (scripts, styles, inline event handlers, script URLs and anything that would
+load from outside the book removed, remote images included) and embedded images are rewritten to
+blob URLs drawn from inside the archive. Links to other parts of the book are rewritten for the
+reader to follow (footnotes scroll within the chapter; links to another chapter open it at the
+target); web and mail links open in the default browser or mail client. The window itself never
+navigates away from the app.
 
 ---
 

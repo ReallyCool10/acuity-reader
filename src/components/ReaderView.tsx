@@ -27,6 +27,7 @@ import {
 } from '../lib/tts';
 import { cleanTitleString } from '../lib/metadata';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
+import { findChapterIndex, findFragment, parseBookTarget, scrollToElement } from '../lib/epubLinks';
 
 /** Upper bound on waiting for a chapter to render before narrating it (~1s at 60fps). */
 const CHAPTER_RENDER_WAIT_FRAMES = 60;
@@ -491,6 +492,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   /* Restore saved scroll offset */
   const savedChapterRef = useRef(initialProgress?.chapterIndex ?? -1);
   const savedScrollRef = useRef(initialProgress?.chapterScroll ?? 0);
+  /** Where in the next chapter a followed link points, scrolled to once it renders. */
+  const pendingFragmentRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -501,7 +504,10 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     const target = chapterIndex === savedChapterRef.current ? savedScrollRef.current : 0;
 
     const frame = requestAnimationFrame(() => {
-      el.scrollTop = target;
+      const anchor = findFragment(proseRef.current, pendingFragmentRef.current ?? '');
+      pendingFragmentRef.current = null;
+      if (anchor) scrollToElement(el, anchor);
+      else el.scrollTop = target;
       restoringRef.current = false;
       savedChapterRef.current = -1;
     });
@@ -521,6 +527,29 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       onProgressUpdate(item.id, index, percentFor(index, 0), 0);
     },
     [chapters.length, item.id, onProgressUpdate, percentFor, stopNarration]
+  );
+
+  /* Links inside the book; `parseEpub` rewrote each to name its target. */
+  const handleProseClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const link = (event.target as Element).closest('[data-book-target]');
+      if (!link) return;
+      event.preventDefault();
+
+      const { path, fragment } = parseBookTarget(link.getAttribute('data-book-target') ?? '');
+      const index = findChapterIndex(chapters, path);
+      if (index === -1) return;
+      if (index !== chapterIndexRef.current) {
+        pendingFragmentRef.current = fragment;
+        goToChapter(index);
+        return;
+      }
+      const scroller = scrollRef.current;
+      const anchor = findFragment(proseRef.current, fragment);
+      if (scroller && anchor) scrollToElement(scroller, anchor);
+      else if (scroller && !fragment) scroller.scrollTop = 0;
+    },
+    [chapters, goToChapter]
   );
 
   useEffect(() => {
@@ -807,6 +836,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
             <div
               ref={proseRef}
+              onClick={handleProseClick}
               onDoubleClick={handleDoubleClickProse}
               data-chapter-index={chapterIndex}
               data-dropcap={chapterIndex === 0}

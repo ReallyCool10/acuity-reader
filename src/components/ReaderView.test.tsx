@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ReaderView } from './ReaderView';
+import { parseEpub } from '../lib/epub';
 import type { MediaItem } from '../types';
 
 vi.mock('../lib/epub', () => ({
@@ -248,6 +249,56 @@ describe('ReaderView (EPUB)', () => {
     expect(narrated[0]).toContain('It is a truth universally acknowledged');
     expect(narrated[1]).toContain('Mr. Bennet was among the earliest');
     expect(container.textContent).toContain('Mr. Bennet was among the earliest');
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it('follows a link to another chapter inside the reader, landing on its target', async () => {
+    vi.mocked(parseEpub).mockResolvedValueOnce({
+      title: 'Linked',
+      author: '',
+      chapters: [
+        {
+          id: 'ch1.html',
+          href: 'ch1.html',
+          title: 'Chapter 1',
+          html: '<p>See <a href="#" data-book-target="ch2.html#later">the second chapter</a>.</p>',
+          text: 'See the second chapter.',
+          words: 4,
+        },
+        {
+          id: 'ch2.html',
+          href: 'ch2.html',
+          title: 'Chapter 2',
+          html: '<p>Opening.</p><p id="later">Later on.</p>',
+          text: 'Opening. Later on.',
+          words: 3,
+        },
+      ],
+      objectUrls: [],
+    });
+    const onProgressUpdate = vi.fn();
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <ReaderView item={sampleBook} onClose={vi.fn()} onProgressUpdate={onProgressUpdate} onAddBookmark={vi.fn()} />
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const link = container.querySelector('a[data-book-target]') as HTMLAnchorElement;
+    const click = new MouseEvent('click', { bubbles: true, cancelable: true });
+    await act(async () => {
+      link.dispatchEvent(click);
+    });
+
+    expect(click.defaultPrevented).toBe(true);
+    expect(container.querySelector('#later')?.textContent).toBe('Later on.');
+    expect(onProgressUpdate).toHaveBeenCalledWith('b1', 1, expect.any(Number), 0);
 
     await act(async () => {
       root.unmount();
