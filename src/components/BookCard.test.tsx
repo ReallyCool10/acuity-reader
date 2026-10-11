@@ -1,8 +1,15 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { MediaItem } from '../types';
+import type { MediaItem, ProgressItem } from '../types';
 import { BookCard } from './BookCard';
+import { useCoverShape } from '../hooks/useCoverShape';
+
+// The real hook, counted: BookCard calls it exactly once per render.
+vi.mock('../hooks/useCoverShape', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../hooks/useCoverShape')>();
+  return { useCoverShape: vi.fn(actual.useCoverShape) };
+});
 
 function makeItem(overrides: Partial<MediaItem> = {}): MediaItem {
   return {
@@ -105,6 +112,27 @@ describe('BookCard', () => {
         else delete (proto as unknown as Record<string, unknown>)[name];
       }
     }
+  });
+
+  it('does not redraw when the shelf re-renders with the same book, only when its progress changes', () => {
+    const item = makeItem({ coverUrl: undefined });
+    const onOpen = vi.fn();
+    const shelf = (tick: number, progress?: ProgressItem) => (
+      <>
+        <span>{tick}</span>
+        <BookCard item={item} progress={progress} onOpen={onOpen} />
+      </>
+    );
+    const draws = vi.mocked(useCoverShape);
+    draws.mockClear();
+
+    act(() => root.render(shelf(0)));
+    act(() => root.render(shelf(1)));
+    act(() => root.render(shelf(2)));
+    expect(draws).toHaveBeenCalledTimes(1);
+
+    act(() => root.render(shelf(3, { id: item.id, percent: 40, lastPlayed: 1 } as ProgressItem)));
+    expect(draws).toHaveBeenCalledTimes(2);
   });
 
   it('keeps "Add to collection" outside the open button, and it does not open the book', () => {

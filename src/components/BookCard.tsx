@@ -23,14 +23,17 @@ interface BookCardProps {
  * control is a button too, and a button may not contain another. The open
  * button covers the cover and caption; the control sits in an overlay that
  * mirrors the cover's box (see `.cover-frame` in tokens.css).
+ *
+ * Memoised: audio progress updates the library about four times a second, and
+ * without it every card on the shelf redrew each time. Pass stable callbacks.
  */
-export const BookCard: React.FC<BookCardProps> = ({
+export const BookCard = React.memo(function BookCard({
   item,
   progress,
   isPlaying,
   onOpen,
   onAddToCollection,
-}) => {
+}: BookCardProps) {
   const { src, ready, aspect, onShown } = useCoverShape(item);
   const isAudio = item.mediaType === 'audio';
   const percent = progress?.percent ?? 0;
@@ -135,4 +138,4 @@ export const BookCard: React.FC<BookCardProps> = ({
       )}
     </div>
   );
-};
+});
