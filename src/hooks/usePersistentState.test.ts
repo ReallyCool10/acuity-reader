@@ -1,12 +1,12 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { useThrottledCallback } from './usePersistentState';
 
 describe('useThrottledCallback', () => {
   let container: HTMLDivElement;
   let root: Root;
-  let save: ReturnType<typeof vi.fn>;
+  let save: Mock<(position: number) => void>;
   let throttled: (position: number) => void;
 
   function Harness() {
@@ -17,7 +17,7 @@ describe('useThrottledCallback', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
-    save = vi.fn();
+    save = vi.fn<(position: number) => void>();
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

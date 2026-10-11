@@ -60,7 +60,8 @@ export async function loadLibraryState(customPath?: string): Promise<LibraryStat
     } catch (err) {
       console.error(`[acuity-mcp] Failed to read library file at ${filePath}:`, err);
       throw new Error(
-        `The Acuity Reader library file at ${filePath} could not be read, so it has been left unchanged.`
+        `The Acuity Reader library file at ${filePath} could not be read, so it has been left unchanged.`,
+        { cause: err }
       );
     }
     return {
