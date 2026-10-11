@@ -71,6 +71,9 @@ or `folder.jpg` in a folder holding a single work; and, for a PDF with none of t
 page, drawn in the background. EPUB covers chosen by earlier versions are corrected on the next
 **Rescan library**.
 
+A folder that cannot be reached when you rescan (an unplugged drive, an offline network share)
+keeps the books its last scan found, with their progress and dates, until it is back.
+
 ### Data
 
 Library state (folders, indexed items, progress, bookmarks) is a single JSON document in

@@ -815,6 +815,18 @@ ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
   registerAllowedRoot(getCoversDir());
   await getScanStore().load();
 
+  // An unplugged drive or an offline network share is not an empty folder.
+  // Scanning it as one took its books off the shelf (and, when it came back,
+  // they returned as newly added), so answer with what its last scan found.
+  const reachable = await fs.promises.readdir(folderPath).then(
+    () => true,
+    () => false
+  );
+  if (!reachable) {
+    logError('scanner', `Folder unreachable, keeping its last scan: ${folderPath}`);
+    return getScanStore().inFolder(folderPath);
+  }
+
   const items: ScannedItem[] = [];
   let lastSent = 0;
 

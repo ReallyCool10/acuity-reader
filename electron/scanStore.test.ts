@@ -54,6 +54,15 @@ describe('electron/scanStore', () => {
     expect(store.get(at('books-private', 'other.epub'))).toBeDefined();
   });
 
+  it('lists what the last scan of a folder found, and nothing from a neighbouring folder', async () => {
+    const store = createScanStore<Entry>(file);
+    await store.load();
+    store.replaceFolder(at('books'), [{ filePath: at('books', 'a.epub'), title: 'A' }]);
+    store.replaceFolder(at('books-private'), [{ filePath: at('books-private', 'b.epub'), title: 'B' }]);
+
+    expect(store.inFolder(at('books')).map((e) => e.title)).toEqual(['A']);
+  });
+
   it('starts empty from a missing, unreadable or older-format file', async () => {
     const missing = createScanStore<Entry>(file);
     await missing.load();

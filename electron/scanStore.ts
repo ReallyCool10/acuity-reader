@@ -16,6 +16,8 @@ const FORMAT_VERSION = 1;
 
 export interface ScanStore<T extends { filePath: string }> {
   get(filePath: string): T | undefined;
+  /** Everything recorded inside `folder`: what its last scan found. */
+  inFolder(folder: string): T[];
   /** Replace everything recorded inside `folder` with this scan's results. */
   replaceFolder(folder: string, items: T[]): void;
   /** Read the record from disk once; an unreadable file starts it empty. */
@@ -42,6 +44,8 @@ export function createScanStore<T extends { filePath: string }>(file: string): S
 
   return {
     get: (filePath) => entries.get(filePath),
+
+    inFolder: (folder) => [...entries.values()].filter((item) => isAllowedPath(item.filePath, [folder])),
 
     replaceFolder(folder, items) {
       for (const filePath of [...entries.keys()]) {
