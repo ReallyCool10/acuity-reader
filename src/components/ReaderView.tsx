@@ -21,6 +21,7 @@ import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
+  isOnlineVoice,
   TTS_PRIVACY_NOTICE,
   VOICE_GROUP_LOCAL,
   VOICE_GROUP_ONLINE,
@@ -91,20 +92,25 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const chapterIndexRef = useRef(chapterIndex);
   const currentCharIndexRef = useRef<number>(0);
 
+  // The voice list comes from Microsoft's speech service. Someone who chose the
+  // system voice should not have the app contact it just by opening a book; the
+  // picker shows a built-in list of online voices until this one arrives.
+  const wantsOnlineVoices = isOnlineVoice(ttsVoice);
   useEffect(() => {
-    if (window.electronAPI?.getEdgeVoices) {
-      window.electronAPI
-        .getEdgeVoices()
-        .then((voices) => {
-          if (voices && voices.length > 0) {
-            setEdgeVoices(voices);
-          }
-        })
-        .catch((err) => {
-          console.warn('Failed to load Edge neural voices:', err);
-        });
-    }
-  }, []);
+    if (!wantsOnlineVoices || !window.electronAPI?.getEdgeVoices) return;
+    let cancelled = false;
+    window.electronAPI
+      .getEdgeVoices()
+      .then((voices) => {
+        if (!cancelled && voices && voices.length > 0) setEdgeVoices(voices);
+      })
+      .catch((err) => {
+        console.warn('Failed to load Edge neural voices:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsOnlineVoices]);
 
   const currentChapter = chapters[chapterIndex];
 

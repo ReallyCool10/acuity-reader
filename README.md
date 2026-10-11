@@ -96,7 +96,8 @@ navigates away from the app.
 ## Privacy
 
 Acuity is a local application: your library is never uploaded, and the app has no account,
-telemetry or analytics.
+telemetry or analytics. Apart from the online voices below, it makes no network requests: its
+fonts are bundled, and books are shown without anything they would load from the web.
 
 **One feature is an exception, and it is on by default.** Read-aloud offers two engines:
 
@@ -117,6 +118,9 @@ Two further caveats about the online engine:
   undocumented and not intended for third-party clients, so it may change or stop working without
   notice. The fallback to the system voice exists partly for that reason.
 - It requires an internet connection. The system voice does not.
+- While an online voice is selected, opening a book also fetches the list of available voices
+  from the same service (once per session; no book text is sent). With the system voice
+  selected, the app does not contact it at all.
 
 The bundled MCP server communicates over **stdio only** — it opens no network port and is reachable
 solely by a local process that launches it.

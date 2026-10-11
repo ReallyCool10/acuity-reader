@@ -304,4 +304,30 @@ describe('ReaderView (EPUB)', () => {
       root.unmount();
     });
   });
+
+  it('does not contact the online speech service for its voice list when the system voice is chosen', async () => {
+    localStorage.setItem('acuity.reader.ttsVoice', JSON.stringify('system-local'));
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<ReaderView item={sampleBook} onClose={vi.fn()} onProgressUpdate={vi.fn()} onAddBookmark={vi.fn()} />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(window.electronAPI?.getEdgeVoices).not.toHaveBeenCalled();
+
+    await act(async () => {
+      root.unmount();
+    });
+    localStorage.removeItem('acuity.reader.ttsVoice');
+    const online = createRoot(container);
+    await act(async () => {
+      online.render(<ReaderView item={sampleBook} onClose={vi.fn()} onProgressUpdate={vi.fn()} onAddBookmark={vi.fn()} />);
+    });
+    expect(window.electronAPI?.getEdgeVoices).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      online.unmount();
+    });
+  });
 });
