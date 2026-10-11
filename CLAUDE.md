@@ -71,6 +71,12 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     boundaries, matched to the text by `alignWordBoundaries` (forward-only, never back to the start
     of the text), and the audio position is checked on animation frames. The engine reports each
     word once; keep per-word work in the reader cheap.
+15. **Shelves load cover thumbnails, made off the UI thread.** Grid, shelf and list covers use
+    `coverThumbUrl` (`acuity://thumb/...`); only the full-screen player and system media controls
+    use the full-size `coverUrl`. Thumbnails are made by the renderer's Web Worker
+    (`src/lib/thumbnails.ts`) and stored by `electron/thumbnails.ts`. Do not decode images with
+    `nativeImage` in the main process for this: it is synchronous and runs on the UI thread that
+    moves and paints the window (measured at 43-166 ms per cover), and it cannot read WebP.
 
 ## UI conventions
 

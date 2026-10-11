@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { MediaItem } from '../types';
-import { coverUrl } from '../lib/media';
+import { coverThumbUrl } from '../lib/media';
 import { DEFAULT_COVER_ASPECT } from '../lib/coverArt';
 
 /** A cover image that is decoded and ready to show, and the frame shape it takes. */
@@ -19,7 +19,7 @@ export interface ShownCover {
  * a rescan gives the item different art, the new cover waits for its own image.
  */
 export function useCoverShape(item: MediaItem) {
-  const src = coverUrl(item);
+  const src = coverThumbUrl(item);
   const [shown, setShown] = useState<ShownCover | null>(null);
   const current = shown !== null && shown.src === src ? shown : null;
 

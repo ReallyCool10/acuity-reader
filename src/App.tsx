@@ -15,6 +15,7 @@ import { AddToCollectionModal } from './components/AddToCollectionModal';
 import { SuggestedSeriesBanner } from './components/SuggestedSeriesBanner';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import { findSiblingTracks } from './lib/playlist';
+import { warmThumbnails } from './lib/thumbnails';
 import {
   createCollection,
   updateCollection,
@@ -204,6 +205,12 @@ export default function App() {
     }
     void init();
   }, [scanFolders]);
+
+  // Make shelf thumbnails for covers that lack one, in the background, whenever the
+  // set of books changes (first load, a scan). Progress updates leave items alone.
+  useEffect(() => {
+    void warmThumbnails(library.items);
+  }, [library.items]);
 
   /* ----------------------------------------------------------- folders */
 

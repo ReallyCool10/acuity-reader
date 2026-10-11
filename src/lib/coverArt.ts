@@ -49,3 +49,18 @@ export function coverAspectFor(width: number, height: number): number | null {
   if (!(width > 0 && height > 0)) return null;
   return Math.min(MAX_COVER_ASPECT, Math.max(MIN_COVER_ASPECT, width / height));
 }
+
+/** Longest side of a shelf thumbnail, in pixels: sharp for a shelf cover at 200% display scaling. */
+export const THUMB_MAX_SIZE = 600;
+export const THUMB_JPEG_QUALITY = 0.85;
+/**
+ * Painted behind a cover's transparent pixels when its thumbnail is made, since
+ * JPEG has no transparency. Matches the `.book-cover` frame in tokens.css.
+ */
+export const COVER_BACKGROUND = '#14141a';
+
+/** The size of a cover's thumbnail: fitted within THUMB_MAX_SIZE, never enlarged. */
+export function thumbnailSize(width: number, height: number): { width: number; height: number } {
+  const scale = Math.min(1, THUMB_MAX_SIZE / Math.max(width, height));
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}

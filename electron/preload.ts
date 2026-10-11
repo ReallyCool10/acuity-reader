@@ -23,6 +23,10 @@ export interface ElectronAPI {
   loadLibrary: () => Promise<LibraryState>;
   saveLibrary: (data: LibraryState) => Promise<boolean>;
   readBytes: (path: string) => Promise<Uint8Array | null>;
+  /** Which of these cover files still need a shelf thumbnail. */
+  thumbnailsMissing: (coverPaths: string[]) => Promise<string[]>;
+  /** Keep a shelf thumbnail (JPEG bytes) made for this cover file. */
+  saveThumbnail: (coverPath: string, jpeg: Uint8Array) => Promise<boolean>;
   updateThumbar: (isPlaying: boolean) => void;
   getThemeInfo: () => Promise<ThemeInfo>;
   setThemeSource: (source: AppTheme) => Promise<ThemeInfo>;
@@ -60,6 +64,8 @@ const api: ElectronAPI = {
   loadLibrary: () => ipcRenderer.invoke('storage:load'),
   saveLibrary: (data) => ipcRenderer.invoke('storage:save', data),
   readBytes: (filePath) => ipcRenderer.invoke('file:readBytes', filePath),
+  thumbnailsMissing: (coverPaths) => ipcRenderer.invoke('thumbs:missing', coverPaths),
+  saveThumbnail: (coverPath, jpeg) => ipcRenderer.invoke('thumbs:save', coverPath, jpeg),
   updateThumbar: (isPlaying) => ipcRenderer.send('thumbar:update', { isPlaying }),
   getThemeInfo: () => ipcRenderer.invoke('system:getThemeInfo'),
   setThemeSource: (source: 'system' | 'dark' | 'light') => ipcRenderer.invoke('system:setThemeSource', source),

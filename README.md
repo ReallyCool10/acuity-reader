@@ -52,6 +52,16 @@ to remain enabled while still streaming audio and covers off local disk.
 The handler implements HTTP range requests, without which `<audio>` cannot seek inside a
 multi-hundred-megabyte `.m4b` — it can only stream from the beginning.
 
+### Cover thumbnails
+
+Shelves show covers a few hundred pixels tall, but cover files are often 1,500–2,500 pixels
+tall, and decoding them at full size left empty slots behind a fast scroll. Shelves therefore
+request `acuity://thumb/<path>`. A Web Worker in the renderer shrinks each cover to fit 600 pixels
+in the background, off every UI thread, and the main process keeps the result in a `thumbs`
+folder in `userData`, keyed by the cover's path, size and modification time. A cover without a
+thumbnail yet is served at full size, and thumbnails for covers no longer in the library are
+deleted at startup. Deleting the folder is safe; it is rebuilt.
+
 ### Data
 
 Library state (folders, indexed items, progress, bookmarks) is a single JSON document in
