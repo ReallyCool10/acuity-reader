@@ -101,6 +101,13 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     `mergeExternalLibraryChanges` against the last saved state and saves again. Every save carries
     the renderer's `libraryGeneration`; saves from before a merge are dropped. Never write the
     library from a state that has not merged the latest outside edit.
+19. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
+    `vite.config.ts`), the second line of defence behind the EPUB sanitiser: script runs only from
+    the app's own files, so no inline handler or `javascript:` URL can run. Never add
+    `'unsafe-inline'` or `'unsafe-eval'` to `script-src`. The dev server does not apply it (hot
+    reload injects inline scripts), so anything that loads from a new host or scheme must be
+    checked in a built app (`npm run build && npm start`), and added to the policy there.
+    `scripts/assert-bundle.mjs` fails the build if the policy is missing.
 
 ## UI conventions
 
