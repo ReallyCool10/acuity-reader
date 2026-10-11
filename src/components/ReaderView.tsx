@@ -816,7 +816,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               lineHeight,
               fontFamily:
                 typeface === 'serif'
-                  ? "Newsreader, 'Playfair Display', Georgia, serif"
+                  ? "'Newsreader Variable', Georgia, serif"
                   : "'Segoe UI Variable Text', -apple-system, system-ui, sans-serif",
             }}
           >

@@ -111,6 +111,9 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 
 ## UI conventions
 
+- The app loads nothing from the web on its own. Fonts are bundled (`@fontsource-variable/*`,
+  imported in `src/main.tsx`), never linked from a font CDN: a remote stylesheet in `<head>`
+  holds up the first paint, and the font is missing offline.
 - Design tokens live in `src/styles/tokens.css`. Use them rather than hardcoding colour, radius,
   shadow, duration or easing. A single shared easing curve is the main reason the interface
   reads as coherent.

@@ -7,15 +7,15 @@ import electron from "vite-plugin-electron/simple";
  * The page's Content Security Policy: a second line of defence behind the EPUB
  * sanitiser (src/lib/epub.ts). Script can come only from the app's own files, so
  * book markup that slipped through cannot run with the preload bridge in reach,
- * and nothing loads from the web except the interface fonts. pdf.js runs its
- * worker from a blob: wrapper, hence `worker-src blob:`.
+ * and nothing loads from the web at all. pdf.js runs its worker from a blob:
+ * wrapper, hence `worker-src blob:`.
  */
 export const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
   "worker-src 'self' blob:",
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' data: https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self' data:",
   "img-src 'self' acuity: blob: data:",
   "media-src acuity: blob:",
   "connect-src 'self' blob: data:",
