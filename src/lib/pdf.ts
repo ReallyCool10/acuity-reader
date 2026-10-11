@@ -33,6 +33,76 @@ export async function loadPdfDocument(
   return loadingTask.promise;
 }
 
+/** Reads bytes [start, end) of one file, with the file's total size. */
+export type ByteRangeReader = (start: number, end: number) => Promise<{ bytes: Uint8Array; size: number } | null>;
+
+/**
+ * Feeds pdf.js only the byte ranges it asks for. Streaming a PDF from its
+ * `acuity://` URL does not work from the renderer: the page's origin is
+ * file://, so CORS blocks script from reading the response, and the reader
+ * falls back to copying the whole file. This reads ranges over IPC instead.
+ */
+class RangeReaderTransport extends pdfjsLib.PDFDataRangeTransport {
+  private readonly readRange: ByteRangeReader;
+
+  constructor(size: number, initialData: Uint8Array, readRange: ByteRangeReader) {
+    super(size, initialData);
+    this.readRange = readRange;
+  }
+
+  requestDataRange(begin: number, end: number) {
+    void this.readRange(begin, end).then((result) => {
+      if (result) this.onDataRange(begin, result.bytes);
+    });
+  }
+}
+
+const COVER_INITIAL_BYTES = 64 * 1024;
+const COVER_TIMEOUT_MS = 30_000;
+
+/**
+ * A PDF's first page as a JPEG, fitted within `maxSize` pixels, to serve as its
+ * cover. Only the parts of the file page 1 needs are read, so a large scanned
+ * book costs no more than a small one. Null if the page cannot be drawn.
+ *
+ * pdf.js parses in its own worker and draws in short slices between frames, so
+ * this does not hold up scrolling.
+ */
+export async function renderPdfCover(readRange: ByteRangeReader, maxSize: number): Promise<Uint8Array | null> {
+  const first = await readRange(0, COVER_INITIAL_BYTES).catch(() => null);
+  if (!first || first.size === 0) return null;
+
+  const task = pdfjsLib.getDocument({
+    range: new RangeReaderTransport(first.size, first.bytes, readRange),
+    disableAutoFetch: true,
+    disableStream: true,
+  });
+  // A range that never arrives would otherwise leave pdf.js waiting for good.
+  const timeout = setTimeout(() => void task.destroy(), COVER_TIMEOUT_MS);
+  try {
+    const doc = await task.promise;
+    const page = await doc.getPage(1);
+    const natural = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: maxSize / Math.max(natural.width, natural.height) });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const context = canvas.getContext('2d');
+    if (!context) return null;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: context, viewport }).promise;
+
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+    void task.destroy();
+  }
+}
+
 /**
  * Extracts metadata and outline chapters from a PDF document.
  */

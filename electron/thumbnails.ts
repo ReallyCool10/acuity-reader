@@ -41,7 +41,7 @@ export function thumbnailKey(sourcePath: string, stat: FileStat): string {
     .digest('hex');
 }
 
-const isJpeg = (bytes: Uint8Array) => bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+export const isJpeg = (bytes: Uint8Array) => bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 
 export interface ThumbnailStore {
   /** The file to serve for a shelf cover: its thumbnail if one exists, otherwise the cover itself. */

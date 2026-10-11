@@ -62,6 +62,15 @@ folder in `userData`, keyed by the cover's path, size and modification time. A c
 thumbnail yet is served at full size, and thumbnails for covers no longer in the library are
 deleted at startup. Deleting the folder is safe; it is rebuilt.
 
+### Where covers come from
+
+In order: an image beside the book with the same name (`Dune.jpg` next to `Dune.epub`); the art
+embedded in an audiobook; for an EPUB, the cover the book itself declares in its package document
+(never simply the first image in the archive, which is often a publisher's logo); a `cover.jpg`
+or `folder.jpg` in a folder holding a single work; and, for a PDF with none of these, its first
+page, drawn in the background. EPUB covers chosen by earlier versions are corrected on the next
+**Rescan library**.
+
 ### Data
 
 Library state (folders, indexed items, progress, bookmarks) is a single JSON document in

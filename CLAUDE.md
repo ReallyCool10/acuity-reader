@@ -77,6 +77,12 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     (`src/lib/thumbnails.ts`) and stored by `electron/thumbnails.ts`. Do not decode images with
     `nativeImage` in the main process for this: it is synchronous and runs on the UI thread that
     moves and paints the window (measured at 43-166 ms per cover), and it cannot read WebP.
+16. **Covers come from what a book declares.** EPUB covers are found by `findEpubCover`
+    (`electron/epubCover.ts`): the OPF's cover-image property, cover meta, guide or first page,
+    never the first image in the archive. PDFs without art get page 1 drawn by
+    `src/lib/pdfCovers.ts`, which reads only the byte ranges pdf.js asks for over IPC
+    (`file:readRange`). Script in the renderer cannot read `acuity://` responses: the page's origin
+    is `file://`, so CORS blocks fetch/XHR (images and media elements are unaffected).
 
 ## UI conventions
 

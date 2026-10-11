@@ -1,4 +1,5 @@
 import type { MediaItem } from '../types';
+import { whenIdle } from './idle';
 import { localCoverPath } from './media';
 
 /**
@@ -32,14 +33,6 @@ export interface ThumbnailApi {
 export type ThumbnailMaker = (bytes: Uint8Array) => Promise<Uint8Array | null>;
 
 let latestRun = 0;
-
-/** Resolve once the renderer is idle, so the first screen of covers loads first. */
-function whenIdle(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestIdleCallback === 'function') requestIdleCallback(() => resolve(), { timeout: 2000 });
-    else setTimeout(resolve, 0);
-  });
-}
 
 /**
  * Make thumbnails for any of these items' covers that lack one. A newer call

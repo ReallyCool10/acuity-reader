@@ -16,6 +16,7 @@ import { SuggestedSeriesBanner } from './components/SuggestedSeriesBanner';
 import { usePersistentState, useThrottledCallback } from './hooks/usePersistentState';
 import { findSiblingTracks } from './lib/playlist';
 import { warmThumbnails } from './lib/thumbnails';
+import { makePdfCovers } from './lib/pdfCovers';
 import {
   createCollection,
   updateCollection,
@@ -211,6 +212,16 @@ export default function App() {
   useEffect(() => {
     void warmThumbnails(library.items);
   }, [library.items]);
+
+  // Draw covers for PDFs that have none, from their first page, in the background.
+  useEffect(() => {
+    void makePdfCovers(library.items, (covers) =>
+      updateLibrary((prev) => ({
+        ...prev,
+        items: prev.items.map((item) => (covers.has(item.id) ? { ...item, coverUrl: covers.get(item.id) } : item)),
+      }))
+    );
+  }, [library.items, updateLibrary]);
 
   /* ----------------------------------------------------------- folders */
 
