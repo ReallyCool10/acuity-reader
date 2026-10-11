@@ -45,24 +45,31 @@ export function getLibraryStoragePath(): string {
 }
 
 /**
- * Load the library state from disk.
+ * Load the library state from disk. A missing file is an empty library.
+ *
+ * A file that exists but cannot be read is an error, not an empty library:
+ * every tool that changes the library loads, edits and saves the whole state,
+ * so treating it as empty would save an empty library over it.
  */
 export async function loadLibraryState(customPath?: string): Promise<LibraryState> {
   const filePath = customPath || getLibraryStoragePath();
-  try {
-    if (fs.existsSync(filePath)) {
-      const content = await fs.promises.readFile(filePath, 'utf8');
-      const parsed = JSON.parse(content) as Partial<LibraryState>;
-      return {
-        folders: Array.isArray(parsed.folders) ? parsed.folders : [],
-        items: Array.isArray(parsed.items) ? parsed.items : [],
-        progress: parsed.progress && typeof parsed.progress === 'object' ? parsed.progress : {},
-        bookmarks: parsed.bookmarks && typeof parsed.bookmarks === 'object' ? parsed.bookmarks : {},
-        collections: Array.isArray(parsed.collections) ? parsed.collections : [],
-      };
+  if (fs.existsSync(filePath)) {
+    let parsed: Partial<LibraryState>;
+    try {
+      parsed = JSON.parse(await fs.promises.readFile(filePath, 'utf8')) as Partial<LibraryState>;
+    } catch (err) {
+      console.error(`[acuity-mcp] Failed to read library file at ${filePath}:`, err);
+      throw new Error(
+        `The Acuity Reader library file at ${filePath} could not be read, so it has been left unchanged.`
+      );
     }
-  } catch (err) {
-    console.error(`[acuity-mcp] Failed to read library file at ${filePath}:`, err);
+    return {
+      folders: Array.isArray(parsed.folders) ? parsed.folders : [],
+      items: Array.isArray(parsed.items) ? parsed.items : [],
+      progress: parsed.progress && typeof parsed.progress === 'object' ? parsed.progress : {},
+      bookmarks: parsed.bookmarks && typeof parsed.bookmarks === 'object' ? parsed.bookmarks : {},
+      collections: Array.isArray(parsed.collections) ? parsed.collections : [],
+    };
   }
 
   return {

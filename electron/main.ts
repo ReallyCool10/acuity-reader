@@ -29,6 +29,7 @@ import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
 import { createThumbnailStore, isJpeg, MAX_THUMB_BYTES, type ThumbnailStore } from './thumbnails';
 import { findEpubCover } from './epubCover';
+import { keepUnreadableLibrary } from './libraryFile';
 import {
   configureMcpRuntime,
   getMcpClients,
@@ -926,6 +927,12 @@ ipcMain.handle('storage:load', async () => {
     }
   } catch (err) {
     logError('storage-load', err);
+    // The empty library returned below would be saved over this file on the next change.
+    const copy = await keepUnreadableLibrary(getStorageFilePath()).catch((copyErr) => {
+      logError('storage-load-backup', copyErr);
+      return null;
+    });
+    if (copy) logError('storage-load', `Library file could not be read; a copy was kept at ${copy}`);
   }
   registerAllowedRoot(getCoversDir());
   return { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
