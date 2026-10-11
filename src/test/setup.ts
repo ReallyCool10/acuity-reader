@@ -23,6 +23,11 @@ if (typeof Element.prototype.scrollIntoView === 'undefined') {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// jsdom never decodes images. Covers wait for decode() before they are shown.
+if (typeof HTMLImageElement.prototype.decode === 'undefined') {
+  HTMLImageElement.prototype.decode = () => Promise.resolve();
+}
+
 // @ts-expect-error React 19 testing flag
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 

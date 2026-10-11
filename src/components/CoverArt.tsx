@@ -1,47 +1,57 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { BookOpen, Headphones } from 'lucide-react';
 import type { MediaItem } from '../types';
-import { coverUrl } from '../lib/media';
 import { coverAspectFor, themeForTitle } from '../lib/coverArt';
+import type { ShownCover } from '../hooks/useCoverShape';
 
 interface CoverArtProps {
   item: MediaItem;
   /** Cleaned title, printed on the generated jacket. */
   displayTitle: string;
-  /**
-   * Reports the frame shape once the image's natural size is known, or null
-   * when there is no usable image and the default shape applies.
-   */
-  onAspectChange?: (aspect: number | null) => void;
+  /** From `useCoverShape`. Render with `key={src}` so a new image starts afresh. */
+  src: string;
+  /** Called once the image is decoded and can be shown, or has failed. */
+  onShown: (shown: ShownCover) => void;
 }
 
 /**
  * The art inside a `.book-cover`: the item's own cover at its natural shape,
  * or a generated jacket when it has none or the image fails to load.
  */
-export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, onAspectChange }) => {
+export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, src, onShown }) => {
   const imgRef = useRef<HTMLImageElement | null>(null);
-  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const src = coverUrl(item);
 
+  const reveal = useCallback(
+    (img: HTMLImageElement) => onShown({ src, aspect: coverAspectFor(img.naturalWidth, img.naturalHeight) }),
+    [src, onShown]
+  );
+
+  // Wait for the decode as well as the download, so the cover appears whole
+  // rather than as an empty frame that the picture pops into a moment later.
   const handleLoad = useCallback(() => {
     const img = imgRef.current;
     if (!img) return;
-    onAspectChange?.(coverAspectFor(img.naturalWidth, img.naturalHeight));
-    setLoaded(true);
-  }, [onAspectChange]);
+    img.decode().then(
+      () => reveal(img),
+      () => {
+        if (img.naturalWidth > 0) reveal(img);
+      }
+    );
+  }, [reveal]);
 
   const handleError = useCallback(() => {
     setFailed(true);
-    onAspectChange?.(null);
-  }, [onAspectChange]);
+    onShown({ src, aspect: null });
+  }, [src, onShown]);
 
-  // A cached image can finish decoding before React attaches onLoad, which would
-  // otherwise leave it stuck at opacity 0. Check completeness on mount too.
-  useEffect(() => {
-    if (imgRef.current?.complete && imgRef.current.naturalWidth > 0) handleLoad();
-  }, [src, handleLoad]);
+  // An image already in memory (the library grid remounting, say) is shown
+  // before the first paint, without a fade. Its load event may also have fired
+  // before React attached the handler.
+  useLayoutEffect(() => {
+    const img = imgRef.current;
+    if (img?.complete && img.naturalWidth > 0) reveal(img);
+  }, [reveal]);
 
   if (!src || failed) return <Jacket item={item} displayTitle={displayTitle} />;
 
@@ -50,7 +60,6 @@ export const CoverArt: React.FC<CoverArtProps> = ({ item, displayTitle, onAspect
       ref={imgRef}
       src={src}
       alt=""
-      data-loaded={loaded}
       loading="lazy"
       decoding="async"
       onLoad={handleLoad}

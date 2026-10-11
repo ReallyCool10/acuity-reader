@@ -86,7 +86,9 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 - Covers are never cropped or padded to a fixed shape. Each card reserves the same shelf slot and
   the cover stands at the bottom of it at its own shape (`--cover-aspect`, clamped by
   `MIN_COVER_ASPECT`/`MAX_COVER_ASPECT` in `src/lib/coverArt.ts`), so every book shares one
-  shelf line. Render cover art through `CoverArt`, which reports the image's shape.
+  shelf line. Render cover art through `CoverArt` with `useCoverShape`: a cover stays hidden
+  until its image is decoded and then fades in, with no placeholder frame; an image already in
+  memory shows on the first paint, and an item without art shows its generated jacket at once.
 - Honour `prefers-reduced-motion`; the token layer already collapses durations.
 - Do not reintroduce magic pixel offsets for the Windows caption buttons — use the
   `env(titlebar-area-*)` variables with a fallback.

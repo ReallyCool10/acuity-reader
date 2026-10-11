@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { FolderPlus, Play } from 'lucide-react';
 import type { MediaItem, ProgressItem } from '../types';
 import { cleanTitleString } from '../lib/metadata';
-import { DEFAULT_COVER_ASPECT } from '../lib/coverArt';
+import { useCoverShape } from '../hooks/useCoverShape';
 import { CoverArt } from './CoverArt';
 
 interface BookCardProps {
@@ -16,7 +16,8 @@ interface BookCardProps {
 /**
  * A book standing on the shelf. Every card reserves the same slot height and
  * the cover stands at the bottom of it at its own shape, so books of different
- * proportions share one shelf line and their titles stay level.
+ * proportions share one shelf line and their titles stay level. The slot stays
+ * empty until the cover image is decoded; then the cover fades in.
  *
  * The card is a container rather than a button: the "Add to collection"
  * control is a button too, and a button may not contain another. The open
@@ -30,23 +31,25 @@ export const BookCard: React.FC<BookCardProps> = ({
   onOpen,
   onAddToCollection,
 }) => {
-  const [aspect, setAspect] = useState<number | null>(null);
-
+  const { src, ready, aspect, onShown } = useCoverShape(item);
   const isAudio = item.mediaType === 'audio';
   const percent = progress?.percent ?? 0;
   const displayTitle = cleanTitleString(item.title) || item.title;
-  const coverAspect = aspect ?? DEFAULT_COVER_ASPECT[item.mediaType];
 
   const label = `${displayTitle}${item.author ? `, by ${item.author}` : ''}. ${
     isAudio ? 'Audiobook' : 'Book'
   }${percent > 0 ? `, ${Math.round(percent)} percent complete` : ''}.`;
 
   return (
-    <div className="book-card group" style={{ '--cover-aspect': coverAspect } as React.CSSProperties}>
+    <div
+      className="book-card group"
+      data-cover-ready={ready}
+      style={{ '--cover-aspect': aspect } as React.CSSProperties}
+    >
       <button type="button" className="book-open" onClick={() => onOpen(item)} aria-label={label}>
         <div className="book-slot">
           <div className="book-cover" data-media-type={item.mediaType}>
-            <CoverArt item={item} displayTitle={displayTitle} onAspectChange={setAspect} />
+            <CoverArt key={src} item={item} displayTitle={displayTitle} src={src} onShown={onShown} />
 
             {item.companionPath ? (
               <span

@@ -21,18 +21,19 @@ function makeItem(overrides: Partial<MediaItem> = {}): MediaItem {
   };
 }
 
-/** jsdom never decodes images; give the cover a natural size and fire its load event. */
-function loadCover(container: HTMLElement, width: number, height: number) {
+/** jsdom never loads images; give the cover a natural size, fire its load event, let decode() settle. */
+async function loadCover(container: HTMLElement, width: number, height: number) {
   const img = container.querySelector('img.cover-image') as HTMLImageElement;
   Object.defineProperty(img, 'naturalWidth', { configurable: true, value: width });
   Object.defineProperty(img, 'naturalHeight', { configurable: true, value: height });
-  act(() => {
+  await act(async () => {
     img.dispatchEvent(new Event('load'));
   });
 }
 
-const aspectOf = (container: HTMLElement) =>
-  Number((container.querySelector('.book-card') as HTMLElement).style.getPropertyValue('--cover-aspect'));
+const card = (container: HTMLElement) => container.querySelector('.book-card') as HTMLElement;
+const aspectOf = (container: HTMLElement) => Number(card(container).style.getPropertyValue('--cover-aspect'));
+const isReady = (container: HTMLElement) => card(container).dataset.coverReady === 'true';
 
 describe('BookCard', () => {
   let container: HTMLDivElement;
@@ -49,32 +50,61 @@ describe('BookCard', () => {
     container.remove();
   });
 
-  it('frames a cover at its own shape once the image loads', () => {
+  it('keeps the slot empty until the cover is decoded, then shows it at its own shape', async () => {
     act(() => root.render(<BookCard item={makeItem()} onOpen={vi.fn()} />));
-    expect(aspectOf(container)).toBeCloseTo(2 / 3);
+    expect(isReady(container)).toBe(false);
 
-    loadCover(container, 1600, 2560);
+    await loadCover(container, 1600, 2560);
+    expect(isReady(container)).toBe(true);
     expect(aspectOf(container)).toBeCloseTo(0.625);
   });
 
-  it('limits an extreme image to the widest frame instead of squashing the card', () => {
+  it('limits an extreme image to the widest frame instead of squashing the card', async () => {
     act(() => root.render(<BookCard item={makeItem({ mediaType: 'audio' })} onOpen={vi.fn()} />));
-    expect(aspectOf(container)).toBe(1);
-
-    loadCover(container, 1500, 500);
+    await loadCover(container, 1500, 500);
     expect(aspectOf(container)).toBe(1.5);
   });
 
-  it('falls back to a generated jacket at the default shape when the image fails', () => {
-    act(() => root.render(<BookCard item={makeItem()} onOpen={vi.fn()} />));
-    loadCover(container, 1000, 1000);
-    expect(aspectOf(container)).toBe(1);
+  it('shows a generated jacket at once when the item has no cover art', () => {
+    act(() => root.render(<BookCard item={makeItem({ coverUrl: undefined })} onOpen={vi.fn()} />));
+    expect(isReady(container)).toBe(true);
+    expect(aspectOf(container)).toBeCloseTo(2 / 3);
+    expect(container.querySelector('img.cover-image')).toBeNull();
+  });
 
+  it('shows a generated jacket at the default shape when the image fails', () => {
+    act(() => root.render(<BookCard item={makeItem()} onOpen={vi.fn()} />));
     act(() => {
       container.querySelector('img.cover-image')!.dispatchEvent(new Event('error'));
     });
     expect(container.querySelector('img.cover-image')).toBeNull();
+    expect(isReady(container)).toBe(true);
     expect(aspectOf(container)).toBeCloseTo(2 / 3);
+  });
+
+  it('shows an image that is already in memory on the first paint, without waiting', () => {
+    const proto = HTMLImageElement.prototype;
+    const complete = Object.getOwnPropertyDescriptor(proto, 'complete');
+    const naturalWidth = Object.getOwnPropertyDescriptor(proto, 'naturalWidth');
+    const naturalHeight = Object.getOwnPropertyDescriptor(proto, 'naturalHeight');
+    Object.defineProperty(proto, 'complete', { configurable: true, get: () => true });
+    Object.defineProperty(proto, 'naturalWidth', { configurable: true, get: () => 1000 });
+    Object.defineProperty(proto, 'naturalHeight', { configurable: true, get: () => 1500 });
+    try {
+      // One synchronous act: no load event, no awaited decode.
+      act(() => root.render(<BookCard item={makeItem()} onOpen={vi.fn()} />));
+      expect(isReady(container)).toBe(true);
+      expect(aspectOf(container)).toBeCloseTo(2 / 3);
+    } finally {
+      for (const [name, descriptor] of [
+        ['complete', complete],
+        ['naturalWidth', naturalWidth],
+        ['naturalHeight', naturalHeight],
+      ] as const) {
+        if (descriptor) Object.defineProperty(proto, name, descriptor);
+        else delete (proto as unknown as Record<string, unknown>)[name];
+      }
+    }
   });
 
   it('keeps "Add to collection" outside the open button, and it does not open the book', () => {

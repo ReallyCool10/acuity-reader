@@ -20,10 +20,10 @@ import {
   getUnresolvedMemberCount,
   type CollectionWorkItem,
 } from '../lib/collections';
-import { DEFAULT_COVER_ASPECT } from '../lib/coverArt';
 import { resolveAudiobookProgress } from '../lib/audiobookGrouping';
 import { CollectionMemberPickerModal } from './CollectionMemberPickerModal';
 import { CoverArt } from './CoverArt';
+import { useCoverShape } from '../hooks/useCoverShape';
 
 interface CollectionDetailViewProps {
   collection: Collection;
@@ -372,16 +372,17 @@ const WorkCover: React.FC<{
   onClick: () => void;
   children: React.ReactNode;
 }> = ({ item, onClick, children }) => {
-  const [aspect, setAspect] = useState<number | null>(null);
+  const { src, ready, aspect, onShown } = useCoverShape(item);
   const displayTitle = cleanTitleString(item.title) || item.title;
 
   return (
     <div
       className="book-slot"
-      style={{ '--cover-aspect': aspect ?? DEFAULT_COVER_ASPECT[item.mediaType] } as React.CSSProperties}
+      data-cover-ready={ready}
+      style={{ '--cover-aspect': aspect } as React.CSSProperties}
     >
       <div className="book-cover cursor-pointer" data-media-type={item.mediaType} onClick={onClick}>
-        <CoverArt item={item} displayTitle={displayTitle} onAspectChange={setAspect} />
+        <CoverArt key={src} item={item} displayTitle={displayTitle} src={src} onShown={onShown} />
         {children}
       </div>
     </div>
