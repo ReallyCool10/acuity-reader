@@ -1,3 +1,4 @@
+import type { ElectronAPI } from '../../electron/preload';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -253,7 +254,7 @@ describe('ReaderShell', () => {
       isMaximized: vi.fn().mockResolvedValue(false),
       onMaximizedChanged: vi.fn().mockReturnValue(() => {}),
       setTitleBarTheme: vi.fn().mockResolvedValue(true),
-    } as unknown as any;
+    } as unknown as ElectronAPI;
 
     const root = createRoot(container);
     await act(async () => {

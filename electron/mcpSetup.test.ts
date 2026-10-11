@@ -50,7 +50,7 @@ describe('electron/mcpSetup', () => {
     `;
     expect(stripJsonComments(jsonWithComments)).not.toContain('Single line comment');
     const parsed = parseJsonSafe(jsonWithComments);
-    expect(parsed.mcpServers['existing-server'].command).toBe('cmd');
+    expect(parsed.mcpServers?.['existing-server']).toMatchObject({ command: 'cmd' });
   });
 
   it('installs Acuity MCP server into a client config preserving existing entries', async () => {
