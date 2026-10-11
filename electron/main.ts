@@ -690,11 +690,7 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
       const cached = itemMetadataCache.get(fullPath);
       if (isCacheHit(cached, stats)) {
-        items.push({
-          ...cached!,
-          fileModifiedAt: stats.mtimeMs,
-          dateAdded: cached!.dateAdded ?? stats.mtimeMs,
-        });
+        items.push({ ...cached!, fileModifiedAt: stats.mtimeMs });
         onProgress(items.length);
         continue;
       }
@@ -769,7 +765,8 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         format: ext.replace('.', ''),
         fileSize: stats.size,
         fileModifiedAt: stats.mtimeMs,
-        dateAdded: stats.mtimeMs,
+        // No first-seen date here: the renderer sets it when the item first joins the
+        // library (carryForwardFirstSeenAt). The file's mtime is not when it was added.
         dirName: parentDirName,
         durationSeconds,
         coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name, audioPictureData),
