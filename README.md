@@ -137,7 +137,8 @@ is open, and are merged with the app's own changes rather than saved over.
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 20 or newer
+- [Node.js](https://nodejs.org/) 22.22.2 or newer on the 22 line, or 24.15 or newer (see
+  `engines` in `package.json`). On Node 20 the test runner cannot start.
 
 ### Install and run
 
@@ -158,7 +159,26 @@ npm start
 ```
 
 On Windows, `AcuityReader.cmd` and `run.vbs` launch an installed checkout directly; both resolve
-paths relative to themselves, so the repository can live anywhere.
+paths relative to themselves, so the repository can live anywhere. They run the built app, so run
+`npm run build` before the first launch.
+
+### Updating
+
+Quit Acuity first. Closing the window quits it, but if it was hidden with the tray icon it is
+still running: right-click the tray icon and choose **Quit Acuity**. Then, in the checkout:
+
+```bash
+git pull
+npm install       # picks up new or changed dependencies
+npm run build
+```
+
+Launch it again with `run.vbs`, `AcuityReader.cmd` or `npm start`. If you installed it with the
+setup program instead, run `npm run dist` after `npm install` and run the new installer from
+`dist-packages/`; it installs over the old version.
+
+Your library, reading progress, bookmarks and collections live in `%APPDATA%\Acuity Reader`, not
+in the checkout or the install folder, so updating never touches them.
 
 ---
 
