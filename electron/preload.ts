@@ -8,6 +8,14 @@ export interface ScanProgress {
 
 export type PlayerCommand = 'toggle-play' | 'skip-back' | 'skip-forward';
 
+export interface LibraryOutsideEdit {
+  /** What this process last wrote: the common ancestor for the merge. */
+  base: LibraryState;
+  /** The file as the other process left it. */
+  external: LibraryState;
+  generation: number;
+}
+
 export interface ElectronAPI {
   minimize: () => Promise<void>;
   maximize: () => Promise<void>;
@@ -21,7 +29,10 @@ export interface ElectronAPI {
   revealInFolder: (path: string) => Promise<void>;
   scanFolder: (path: string) => Promise<MediaItem[]>;
   loadLibrary: () => Promise<LibraryState>;
-  saveLibrary: (data: LibraryState) => Promise<boolean>;
+  /** `generation`: the latest outside edit this renderer has merged (onLibraryOutsideEdit). */
+  saveLibrary: (data: LibraryState, generation?: number) => Promise<boolean>;
+  /** Another process (the MCP server) edited the library file; merge it and save. */
+  onLibraryOutsideEdit: (callback: (edit: LibraryOutsideEdit) => void) => () => void;
   readBytes: (path: string) => Promise<Uint8Array | null>;
   /** Bytes [start, end) of a file and its total size, for reading parts of large PDFs. */
   readRange: (path: string, start: number, end: number) => Promise<{ bytes: Uint8Array; size: number } | null>;
@@ -66,7 +77,8 @@ const api: ElectronAPI = {
   revealInFolder: (filePath) => ipcRenderer.invoke('shell:revealInFolder', filePath),
   scanFolder: (folderPath) => ipcRenderer.invoke('scanner:scanFolder', folderPath),
   loadLibrary: () => ipcRenderer.invoke('storage:load'),
-  saveLibrary: (data) => ipcRenderer.invoke('storage:save', data),
+  saveLibrary: (data, generation) => ipcRenderer.invoke('storage:save', data, generation),
+  onLibraryOutsideEdit: (callback) => subscribe('library:outside-edit', callback),
   readBytes: (filePath) => ipcRenderer.invoke('file:readBytes', filePath),
   readRange: (filePath, start, end) => ipcRenderer.invoke('file:readRange', filePath, start, end),
   thumbnailsMissing: (coverPaths) => ipcRenderer.invoke('thumbs:missing', coverPaths),

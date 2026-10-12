@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { safeDecode, schemeOf } from './epubLinks';
 
 export interface EpubChapter {
   id: string;
@@ -26,8 +27,33 @@ const BLOCK_TAGS = new Set([
   'MAIN', 'NAV', 'OL', 'P', 'PRE', 'SECTION', 'TABLE', 'TR', 'UL',
 ]);
 
-/** Tags removed outright — scripts, styling and anything that can load remote content. */
-const STRIP_TAGS = 'script, style, link, meta, iframe, object, embed, form, input, button, audio, video, base';
+/**
+ * Elements removed outright: scripts, styling, anything that can load remote
+ * content, and SVG animation, which can set an href after sanitising. Matched by
+ * lower-cased local name, so SVG's camel-cased names are caught too.
+ */
+const STRIP_ELEMENTS = new Set([
+  'script', 'style', 'link', 'meta', 'base', 'iframe', 'frame', 'frameset', 'object', 'embed',
+  'form', 'input', 'button', 'audio', 'video',
+  'animate', 'animatemotion', 'animatetransform', 'set',
+]);
+
+/** URL schemes that run code when followed. */
+const SCRIPT_SCHEMES = new Set(['javascript', 'vbscript']);
+
+/** Elements whose href is a link, rewritten by `rewriteLinks`. */
+const LINK_ELEMENTS = new Set(['a', 'area']);
+
+/**
+ * A CSS `url()` that does not point within the chapter (`url(#gradient)`). Such a
+ * URL would be fetched from the web, or resolved against the app's page rather
+ * than the book (and on Windows `//host/x` becomes a network share), never from
+ * the archive.
+ */
+const OUTSIDE_CSS_URL = /url\s*\((?!\s*['"]?\s*#)/i;
+
+/** Schemes a link may keep: they open in the user's browser or mail client, never in the app. */
+const OUTSIDE_SCHEMES = new Set(['http', 'https', 'mailto']);
 
 /**
  * Resolve an EPUB-relative href against the directory holding the document that
@@ -62,13 +88,13 @@ function findEntry(zip: JSZip, path: string): JSZip.JSZipObject | null {
   const direct = zip.file(path);
   if (direct) return direct;
 
-  const decoded = decodeURIComponent(path);
+  const decoded = safeDecode(path);
   const viaDecoded = zip.file(decoded);
   if (viaDecoded) return viaDecoded;
 
   const target = decoded.toLowerCase();
   for (const entry of Object.values(zip.files)) {
-    if (!entry.dir && decodeURIComponent(entry.name).toLowerCase() === target) return entry;
+    if (!entry.dir && safeDecode(entry.name).toLowerCase() === target) return entry;
   }
   return null;
 }
@@ -121,32 +147,17 @@ async function readTocLabels(zip: JSZip, opfDoc: Document, opfDir: string): Prom
 
 /**
  * Strip anything executable or remote-loading, then repoint in-archive images at
- * blob URLs. Returns the minted URLs so the caller can revoke them.
+ * blob URLs (recorded in `imageCache` so the caller can revoke them) and rewrite
+ * links (see `rewriteLinks`).
  */
 async function sanitiseChapter(
   zip: JSZip,
   doc: Document,
-  chapterDir: string,
+  chapterPath: string,
   imageCache: Map<string, string>
 ): Promise<string> {
-  doc.body?.querySelectorAll(STRIP_TAGS).forEach((el) => el.remove());
-
-  for (const el of Array.from(doc.body?.querySelectorAll('*') || [])) {
-    for (const attr of Array.from(el.attributes)) {
-      const name = attr.name.toLowerCase();
-      const value = attr.value.trim().toLowerCase();
-      if (name.startsWith('on')) el.removeAttribute(attr.name);
-      else if ((name === 'href' || name === 'src') && value.startsWith('javascript:')) {
-        el.removeAttribute(attr.name);
-      } else if (name === 'style') {
-        const cleaned = attr.value
-          .replace(/(?:color|background(?:-color)?)\s*:[^;]+;?/gi, '')
-          .trim();
-        if (cleaned) el.setAttribute('style', cleaned);
-        else el.removeAttribute('style');
-      }
-    }
-  }
+  const chapterDir = dirOf(chapterPath);
+  removeActiveContent(doc);
 
   const images = Array.from(doc.body?.querySelectorAll('img[src], image') || []);
   for (const img of images) {
@@ -154,7 +165,9 @@ async function sanitiseChapter(
     const raw = isSvgImage
       ? img.getAttribute('xlink:href') || img.getAttribute('href')
       : img.getAttribute('src');
-    if (!raw || /^(https?:|data:|blob:)/i.test(raw)) continue;
+    if (!raw || schemeOf(raw) === 'data') continue;
+    // Anything else must be in the archive: a remote image is removed with the
+    // missing ones below, so opening a book never contacts a server.
 
     const path = resolveHref(chapterDir, raw);
     let url = imageCache.get(path);
@@ -168,19 +181,106 @@ async function sanitiseChapter(
       imageCache.set(path, url);
     }
 
-    if (isSvgImage) img.setAttribute('href', url);
-    else img.setAttribute('src', url);
-  }
-
-  // External links would navigate the reader away from the app; neutralise them.
-  for (const anchor of Array.from(doc.body?.querySelectorAll('a[href]') || [])) {
-    if (/^https?:/i.test(anchor.getAttribute('href') || '')) {
-      anchor.setAttribute('target', '_blank');
-      anchor.setAttribute('rel', 'noopener noreferrer');
+    if (isSvgImage) {
+      img.setAttribute('href', url);
+      img.removeAttribute('xlink:href');
+    } else {
+      img.setAttribute('src', url);
     }
   }
 
+  rewriteLinks(doc, chapterPath);
   return doc.body?.innerHTML ?? '';
+}
+
+function removeActiveContent(doc: Document): void {
+  for (const el of Array.from(doc.body?.querySelectorAll('*') || [])) {
+    // An ancestor already removed takes its descendants with it.
+    if (!el.isConnected) continue;
+    const tag = el.localName.toLowerCase();
+
+    if (STRIP_ELEMENTS.has(tag)) {
+      el.remove();
+      continue;
+    }
+    // DOMParser documents parse with scripting off, so <noscript> holds markup
+    // here; the live page parses it as raw text, which differs. Scripts never run
+    // in the reader, so its fallback content is what should show anyway.
+    if (tag === 'noscript') {
+      el.replaceWith(...Array.from(el.childNodes));
+      continue;
+    }
+
+    for (const attr of Array.from(el.attributes)) {
+      if (attr.name.toLowerCase() === 'style') cleanStyle(el, attr.value);
+      else if (!keepAttribute(tag, attr)) el.removeAttribute(attr.name);
+    }
+  }
+}
+
+/**
+ * Whether an attribute may stay. Images (`img` src, SVG `image` href) are
+ * resolved from the archive afterwards and links rewritten; any other URL that
+ * loads something must point within the chapter or be inline data, because a
+ * relative one resolves against the app's page rather than the book.
+ */
+function keepAttribute(tag: string, attr: Attr): boolean {
+  const name = attr.name.toLowerCase();
+  if (name.startsWith('on')) return false;
+  const scheme = schemeOf(attr.value);
+  if (scheme && SCRIPT_SCHEMES.has(scheme)) return false;
+  // Never resolved against the archive; the image's src is its fallback.
+  if (name === 'srcset') return false;
+  if (name === 'background' || name === 'poster') return scheme === 'data';
+  if (attr.localName === 'href' && !LINK_ELEMENTS.has(tag) && tag !== 'image') {
+    return attr.value.trim().startsWith('#');
+  }
+  return !OUTSIDE_CSS_URL.test(attr.value);
+}
+
+/** Drop the book's colours, so the reading theme applies, and any url() that would load from outside. */
+function cleanStyle(el: Element, style: string): void {
+  const cleaned = style
+    .replace(/(?:color|background(?:-color)?)\s*:[^;]+;?/gi, '')
+    .split(';')
+    .filter((declaration) => !OUTSIDE_CSS_URL.test(declaration))
+    .join(';')
+    .trim();
+  if (cleaned) el.setAttribute('style', cleaned);
+  else el.removeAttribute('style');
+}
+
+/**
+ * Following a link inside the book would navigate the app's own page, replacing
+ * the whole window. Each one is rewritten to record its target instead, as an
+ * archive path plus fragment in `data-book-target`, for the reader to follow
+ * (see `findChapterIndex`). Web and mail links open outside the app; links with any
+ * other scheme are disabled.
+ */
+function rewriteLinks(doc: Document, chapterPath: string): void {
+  for (const link of Array.from(doc.body?.querySelectorAll('a, area') || [])) {
+    const href = (link.getAttribute('href') ?? link.getAttribute('xlink:href'))?.trim();
+    link.removeAttribute('xlink:href');
+    if (!href) continue;
+
+    const scheme = schemeOf(href);
+    if (scheme && OUTSIDE_SCHEMES.has(scheme)) {
+      link.setAttribute('href', href);
+      link.setAttribute('target', '_blank');
+      link.setAttribute('rel', 'noopener noreferrer');
+    } else if (scheme) {
+      link.removeAttribute('href');
+      link.removeAttribute('target');
+    } else {
+      const hashAt = href.indexOf('#');
+      const path = hashAt === 0 ? chapterPath : resolveHref(dirOf(chapterPath), href);
+      const fragment = hashAt === -1 ? '' : href.slice(hashAt + 1);
+      // Keep an href so the link stays focusable and announced as a link.
+      link.setAttribute('href', '#');
+      link.setAttribute('data-book-target', fragment ? `${path}#${fragment}` : path);
+      link.removeAttribute('target');
+    }
+  }
 }
 
 /**
@@ -302,7 +402,7 @@ export async function parseEpub(data: ArrayBuffer | Uint8Array): Promise<EpubBoo
     }
 
     const doc = new DOMParser().parseFromString(await entry.async('text'), 'text/html');
-    const html = await sanitiseChapter(zip, doc, dirOf(chapterPath), imageCache);
+    const html = await sanitiseChapter(zip, doc, chapterPath, imageCache);
     const text = extractText(doc.body);
     if (countWords(text) < 8) continue; // skip empty separator pages
     const heading = doc.querySelector('h1, h2, h3, h4')?.textContent?.trim();

@@ -35,6 +35,9 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
 1. **No `file://` in the renderer.** Local media is served through the `acuity://` scheme
    registered in `electron/main.ts`, which validates every path against the user's registered
    library folders. This is what lets `webSecurity` stay enabled — do not disable it.
+   A folder becomes readable only when the user picks it (`dialog:pickFolder`) or it is in the
+   saved library. Never register a folder because the renderer asked (`scanner:scanFolder`,
+   `storage:save`): script in the page could then read any file on the machine.
 2. **Path containment is checked with `path.relative`, not string prefixes.** A prefix test
    treats `/books-private` as inside `/books`.
 3. **Range requests are required** in the media handler. Without them `<audio>` cannot seek
@@ -46,7 +49,13 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
    layout and returns null for a document that was never attached to a view. Use the tree walk in
    `extractText`. A regression here silently produces empty chapters.
 7. **Chapter HTML must stay sanitised** before it reaches `dangerouslySetInnerHTML`. Sanitisation
-   lives in `parseEpub`; do not render EPUB markup that has not been through it.
+   lives in `parseEpub`; do not render EPUB markup that has not been through it. Script in the
+   renderer can reach the preload bridge, so a sanitiser miss is serious. URL schemes are read
+   with `schemeOf`, which ignores whitespace and control characters as browsers do
+   (`java&#9;script:` is javascript); never test a URL attribute with a plain prefix check.
+   Links inside a book must not navigate the page: `parseEpub` rewrites them to
+   `data-book-target` and the reader follows them. The main process also refuses every
+   navigation of the window (`will-navigate`).
 8. **Blob URLs minted for embedded images must be revoked** when the reader unmounts.
 9. **Modules under `electron/` must not import `electron` at module scope** unless they genuinely
    need the app object at import time. A static `import { app } from 'electron'` forces anything
@@ -86,9 +95,25 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     opening a large scanned book does not copy the whole file. Script in the renderer cannot read
     `acuity://` responses: the page's origin is `file://`, so CORS blocks fetch/XHR (images and
     media elements are unaffected).
+18. **The library file has two writers.** The MCP server edits `acuity_library.json` directly
+    (progress, bookmarks, collections). The main process notices another process's write (stamp
+    check before every write, plus a watch) and sends it to the renderer, which merges it with
+    `mergeExternalLibraryChanges` against the last saved state and saves again. Every save carries
+    the renderer's `libraryGeneration`; saves from before a merge are dropped. Never write the
+    library from a state that has not merged the latest outside edit.
+19. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
+    `vite.config.ts`), the second line of defence behind the EPUB sanitiser: script runs only from
+    the app's own files, so no inline handler or `javascript:` URL can run. Never add
+    `'unsafe-inline'` or `'unsafe-eval'` to `script-src`. The dev server does not apply it (hot
+    reload injects inline scripts), so anything that loads from a new host or scheme must be
+    checked in a built app (`npm run build && npm start`), and added to the policy there.
+    `scripts/assert-bundle.mjs` fails the build if the policy is missing.
 
 ## UI conventions
 
+- The app loads nothing from the web on its own. Fonts are bundled (`@fontsource-variable/*`,
+  imported in `src/main.tsx`), never linked from a font CDN: a remote stylesheet in `<head>`
+  holds up the first paint, and the font is missing offline.
 - Design tokens live in `src/styles/tokens.css`. Use them rather than hardcoding colour, radius,
   shadow, duration or easing. A single shared easing curve is the main reason the interface
   reads as coherent.

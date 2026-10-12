@@ -109,6 +109,22 @@ describe('mcp-server/storage', () => {
     }
   });
 
+
+  it('refuses to change a library file it cannot read, rather than saving an empty library over it', async () => {
+    const unreadable = '{"items": [ {"id": "item-1", truncated';
+    fs.writeFileSync(tempFilePath, unreadable);
+
+    await expect(updateReadingProgress('item-1', { percent: 50 }, tempFilePath)).rejects.toThrow(/could not be read/);
+    await expect(addBookmark('item-1', { position: 3 }, tempFilePath)).rejects.toThrow(/could not be read/);
+    await expect(createCollection({ name: 'New', kind: 'theme' }, tempFilePath)).rejects.toThrow(/could not be read/);
+
+    expect(fs.readFileSync(tempFilePath, 'utf8')).toBe(unreadable);
+  });
+
+  it('treats a missing library file as an empty library', async () => {
+    const state = await loadLibraryState(path.join(os.tmpdir(), `acuity-missing-${Date.now()}.json`));
+    expect(state.items).toEqual([]);
+  });
   it('loads library state correctly', async () => {
     const loaded = await loadLibraryState(tempFilePath);
     expect(loaded.items.length).toBe(3);

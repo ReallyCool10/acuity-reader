@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { MediaItem, ProgressItem } from '../types';
 import {
   getDirectory,
@@ -562,6 +562,33 @@ describe('grouped audiobook date handling', () => {
     const book = groupMultiFileAudiobooks([t1, t2, t3])[0];
     expect(book.fileModifiedAt).toBe(300);
     expect(book.firstSeenAt).toBe(400);
+  });
+});
+
+describe('a newly scanned multi-file audiobook', () => {
+  it('is dated when first seen, not by when its files were last modified', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-10-11T12:00:00Z'));
+    try {
+      // What the scanner reports for files it has not seen before: modification
+      // times from years ago, and no first-seen date of their own.
+      const fiveYearsAgo = Date.parse('2021-06-01T00:00:00Z');
+      const scanned = [1, 2, 3].map((n) =>
+        track(n, {
+          fileModifiedAt: fiveYearsAgo,
+          dateAdded: fiveYearsAgo,
+          firstSeenAt: undefined as unknown as number,
+        })
+      );
+
+      const [book] = carryForwardFirstSeenAt([], groupMultiFileAudiobooks(scanned));
+
+      expect(book.tracks).toHaveLength(3);
+      expect(book.firstSeenAt).toBe(Date.now());
+      expect(book.fileModifiedAt).toBe(fiveYearsAgo);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

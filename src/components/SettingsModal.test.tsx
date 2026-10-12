@@ -1,3 +1,4 @@
+import type { ElectronAPI } from '../../electron/preload';
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -203,7 +204,7 @@ describe('SettingsModal', () => {
       installMcpClient: vi.fn().mockResolvedValue({ success: true, message: 'Installed!' }),
       uninstallMcpClient: vi.fn().mockResolvedValue({ success: true, message: 'Removed!' }),
       getMcpSnippet: vi.fn().mockResolvedValue('{"mcpServers": {}}'),
-    } as any;
+    } as unknown as ElectronAPI;
 
     const root = createRoot(container);
     await act(async () => {

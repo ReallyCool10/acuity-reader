@@ -157,7 +157,13 @@ export function stripJsonComments(str: string): string {
   return str.replace(/\/\*[\s\S]*?\*\/|([^:]|^)\/\/.*$/gm, '$1');
 }
 
-export function parseJsonSafe(content: string): Record<string, any> {
+/** An MCP client's config file: `mcpServers`, plus whatever else that client keeps there. */
+export interface McpClientConfig {
+  mcpServers?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export function parseJsonSafe(content: string): McpClientConfig {
   try {
     return JSON.parse(content);
   } catch {
@@ -165,7 +171,7 @@ export function parseJsonSafe(content: string): Record<string, any> {
   }
 }
 
-export async function writeJsonAtomic(filePath: string, data: Record<string, any>): Promise<void> {
+export async function writeJsonAtomic(filePath: string, data: McpClientConfig): Promise<void> {
   const dir = path.dirname(filePath);
   await fs.promises.mkdir(dir, { recursive: true });
   const tmpPath = `${filePath}.tmp.${Date.now()}`;
@@ -220,7 +226,7 @@ export async function installMcpClient(
   const configPath = def.getConfigPath(customHome);
 
   try {
-    let json: Record<string, any> = { mcpServers: {} };
+    let json: McpClientConfig = { mcpServers: {} };
 
     if (fs.existsSync(configPath)) {
       const raw = await fs.promises.readFile(configPath, 'utf8');

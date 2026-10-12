@@ -17,6 +17,7 @@ import { usePersistentState, useThrottledCallback } from './hooks/usePersistentS
 import { findSiblingTracks } from './lib/playlist';
 import { warmThumbnails } from './lib/thumbnails';
 import { makePdfCovers } from './lib/pdfCovers';
+import { mergeExternalLibraryChanges } from './lib/libraryMerge';
 import {
   createCollection,
   updateCollection,
@@ -70,6 +71,9 @@ export default function App() {
 
   const searchRef = useRef<HTMLInputElement | null>(null);
 
+  /** The latest outside edit to the library file this window has merged; sent with each save. */
+  const libraryGenerationRef = useRef(0);
+
   /*
    * One write path for the whole library.
    *
@@ -78,7 +82,7 @@ export default function App() {
    * `timeupdate` event — each of which re-serialised the entire library.
    */
   const saveLibrary = useThrottledCallback((state: LibraryState) => {
-    void window.electronAPI?.saveLibrary(state);
+    void window.electronAPI?.saveLibrary(state, libraryGenerationRef.current);
   }, 1000);
 
   const updateLibrary = useCallback(
@@ -197,7 +201,7 @@ export default function App() {
           item.fileModifiedAt !== saved.items[index]?.fileModifiedAt ||
           item.firstSeenAt !== saved.items[index]?.firstSeenAt
       );
-      if (changed || idsChanged || datesChanged) void window.electronAPI?.saveLibrary(state);
+      if (changed || idsChanged || datesChanged) void window.electronAPI?.saveLibrary(state, libraryGenerationRef.current);
 
       // Initial scan if folders are configured but library items are empty.
       if (saved.folders?.length && saved.items.length === 0) {
@@ -206,6 +210,16 @@ export default function App() {
     }
     void init();
   }, [scanFolders]);
+
+  // The MCP server edited the library file: merge its edits rather than save over them.
+  useEffect(() => {
+    return window.electronAPI?.onLibraryOutsideEdit?.((edit) => {
+      libraryGenerationRef.current = edit.generation;
+      updateLibrary((prev) =>
+        mergeExternalLibraryChanges({ ...EMPTY_LIBRARY, ...edit.base }, prev, { ...EMPTY_LIBRARY, ...edit.external })
+      );
+    });
+  }, [updateLibrary]);
 
   // Make shelf thumbnails for covers that lack one, in the background, whenever the
   // set of books changes (first load, a scan). Progress updates leave items alone.

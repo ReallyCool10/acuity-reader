@@ -21,12 +21,14 @@ import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
+  isOnlineVoice,
   TTS_PRIVACY_NOTICE,
   VOICE_GROUP_LOCAL,
   VOICE_GROUP_ONLINE,
 } from '../lib/tts';
 import { cleanTitleString } from '../lib/metadata';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
+import { findChapterIndex, findFragment, parseBookTarget, scrollToElement } from '../lib/epubLinks';
 
 /** Upper bound on waiting for a chapter to render before narrating it (~1s at 60fps). */
 const CHAPTER_RENDER_WAIT_FRAMES = 60;
@@ -90,20 +92,25 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const chapterIndexRef = useRef(chapterIndex);
   const currentCharIndexRef = useRef<number>(0);
 
+  // The voice list comes from Microsoft's speech service. Someone who chose the
+  // system voice should not have the app contact it just by opening a book; the
+  // picker shows a built-in list of online voices until this one arrives.
+  const wantsOnlineVoices = isOnlineVoice(ttsVoice);
   useEffect(() => {
-    if (window.electronAPI?.getEdgeVoices) {
-      window.electronAPI
-        .getEdgeVoices()
-        .then((voices) => {
-          if (voices && voices.length > 0) {
-            setEdgeVoices(voices);
-          }
-        })
-        .catch((err) => {
-          console.warn('Failed to load Edge neural voices:', err);
-        });
-    }
-  }, []);
+    if (!wantsOnlineVoices || !window.electronAPI?.getEdgeVoices) return;
+    let cancelled = false;
+    window.electronAPI
+      .getEdgeVoices()
+      .then((voices) => {
+        if (!cancelled && voices && voices.length > 0) setEdgeVoices(voices);
+      })
+      .catch((err) => {
+        console.warn('Failed to load Edge neural voices:', err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [wantsOnlineVoices]);
 
   const currentChapter = chapters[chapterIndex];
 
@@ -491,6 +498,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   /* Restore saved scroll offset */
   const savedChapterRef = useRef(initialProgress?.chapterIndex ?? -1);
   const savedScrollRef = useRef(initialProgress?.chapterScroll ?? 0);
+  /** Where in the next chapter a followed link points, scrolled to once it renders. */
+  const pendingFragmentRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (status !== 'ready') return;
@@ -501,7 +510,10 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
     const target = chapterIndex === savedChapterRef.current ? savedScrollRef.current : 0;
 
     const frame = requestAnimationFrame(() => {
-      el.scrollTop = target;
+      const anchor = findFragment(proseRef.current, pendingFragmentRef.current ?? '');
+      pendingFragmentRef.current = null;
+      if (anchor) scrollToElement(el, anchor);
+      else el.scrollTop = target;
       restoringRef.current = false;
       savedChapterRef.current = -1;
     });
@@ -521,6 +533,29 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
       onProgressUpdate(item.id, index, percentFor(index, 0), 0);
     },
     [chapters.length, item.id, onProgressUpdate, percentFor, stopNarration]
+  );
+
+  /* Links inside the book; `parseEpub` rewrote each to name its target. */
+  const handleProseClick = useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      const link = (event.target as Element).closest('[data-book-target]');
+      if (!link) return;
+      event.preventDefault();
+
+      const { path, fragment } = parseBookTarget(link.getAttribute('data-book-target') ?? '');
+      const index = findChapterIndex(chapters, path);
+      if (index === -1) return;
+      if (index !== chapterIndexRef.current) {
+        pendingFragmentRef.current = fragment;
+        goToChapter(index);
+        return;
+      }
+      const scroller = scrollRef.current;
+      const anchor = findFragment(proseRef.current, fragment);
+      if (scroller && anchor) scrollToElement(scroller, anchor);
+      else if (scroller && !fragment) scroller.scrollTop = 0;
+    },
+    [chapters, goToChapter]
   );
 
   useEffect(() => {
@@ -787,7 +822,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
               lineHeight,
               fontFamily:
                 typeface === 'serif'
-                  ? "Newsreader, 'Playfair Display', Georgia, serif"
+                  ? "'Newsreader Variable', Georgia, serif"
                   : "'Segoe UI Variable Text', -apple-system, system-ui, sans-serif",
             }}
           >
@@ -807,6 +842,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
             <div
               ref={proseRef}
+              onClick={handleProseClick}
               onDoubleClick={handleDoubleClickProse}
               data-chapter-index={chapterIndex}
               data-dropcap={chapterIndex === 0}

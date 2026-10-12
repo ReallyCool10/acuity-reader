@@ -20,14 +20,17 @@ import crypto from 'node:crypto';
 import * as mm from 'music-metadata';
 import JSZip from 'jszip';
 import { registerAllowedRoot, isAllowedPath } from './paths';
+import { parseByteRange } from './byteRange';
 import { computeStableId, migrateLibraryState } from './id';
-import { isCacheHit } from './scanCache';
+import { findCacheHit } from './scanCache';
+import { createScanStore, type ScanStore } from './scanStore';
 import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
 import { createThumbnailStore, isJpeg, MAX_THUMB_BYTES, type ThumbnailStore } from './thumbnails';
 import { findEpubCover } from './epubCover';
+import { keepUnreadableLibrary } from './libraryFile';
 import {
   configureMcpRuntime,
   getMcpClients,
@@ -164,28 +167,23 @@ async function serveFile(request: Request): Promise<Response> {
   }
 
   const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
-  const rangeHeader = request.headers.get('Range');
-  const rangeMatch = rangeHeader?.match(/bytes=(\d*)-(\d*)/);
+  const range = parseByteRange(request.headers.get('Range'), stat.size);
 
-  if (rangeMatch) {
-    const start = rangeMatch[1] ? Number(rangeMatch[1]) : 0;
-    const end = rangeMatch[2] ? Number(rangeMatch[2]) : stat.size - 1;
+  if (range === 'unsatisfiable') {
+    return new Response('Range not satisfiable', {
+      status: 416,
+      headers: { 'Content-Range': `bytes */${stat.size}` },
+    });
+  }
 
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= stat.size) {
-      return new Response('Range not satisfiable', {
-        status: 416,
-        headers: { 'Content-Range': `bytes */${stat.size}` },
-      });
-    }
-
-    const clampedEnd = Math.min(end, stat.size - 1);
-    const stream = fs.createReadStream(filePath, { start, end: clampedEnd });
+  if (range) {
+    const stream = fs.createReadStream(filePath, { start: range.start, end: range.end });
     return new Response(Readable.toWeb(stream) as ReadableStream, {
       status: 206,
       headers: {
         'Accept-Ranges': 'bytes',
-        'Content-Length': String(clampedEnd - start + 1),
-        'Content-Range': `bytes ${start}-${clampedEnd}/${stat.size}`,
+        'Content-Length': String(range.end - range.start + 1),
+        'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
         'Content-Type': contentType,
       },
     });
@@ -375,8 +373,15 @@ function createMainWindow() {
 
   // Keep navigation inside the app; open real links in the user's browser.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) shell.openExternal(url);
+    if (/^(https?|mailto):/i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  // The window never leaves the app's page. A link in a book that navigated it
+  // would replace the whole interface (with chrome-error:// for a path that does
+  // not exist); the reader follows book links itself. A reload is still allowed.
+  mainWindow.webContents.on('will-navigate', (event) => {
+    if (event.url !== mainWindow?.webContents.getURL()) event.preventDefault();
   });
 
   if (process.env.VITE_DEV_SERVER_URL) {
@@ -482,7 +487,11 @@ ipcMain.handle('dialog:pickFolder', async () => {
     title: 'Select your books and audiobooks folder',
     properties: ['openDirectory'],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled || !result.filePaths[0]) return null;
+  // The user chose this folder, so the app may read it. This and the saved
+  // library are the only ways a folder becomes readable (see scanner:scanFolder).
+  registerAllowedRoot(result.filePaths[0]);
+  return result.filePaths[0];
 });
 
 ipcMain.handle('shell:revealInFolder', (_event, filePath: string) => {
@@ -661,6 +670,14 @@ interface ScannedItem {
 /** In-memory cache of scanned items to avoid re-parsing tags and covers on rescan. */
 const itemMetadataCache = new Map<string, ScannedItem>();
 
+let scanStore: ScanStore<ScannedItem> | null = null;
+
+/** Every file the scanner has read, kept across restarts (scanStore.ts). */
+function getScanStore(): ScanStore<ScannedItem> {
+  scanStore ??= createScanStore<ScannedItem>(path.join(app.getPath('userData'), 'scan_cache.json'));
+  return scanStore;
+}
+
 async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: (count: number) => void) {
   let entries: fs.Dirent[];
   try {
@@ -688,13 +705,11 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
       const stats = await fs.promises.stat(fullPath);
 
       // Mtime + size skip: if file size and mtime are unchanged, reuse cached metadata.
-      const cached = itemMetadataCache.get(fullPath);
-      if (isCacheHit(cached, stats)) {
-        items.push({
-          ...cached!,
-          fileModifiedAt: stats.mtimeMs,
-          dateAdded: cached!.dateAdded ?? stats.mtimeMs,
-        });
+      // The saved library's item first (it carries the user's edits), then the
+      // scanner's own record, which also covers each file of a grouped audiobook.
+      const cached = findCacheHit([itemMetadataCache.get(fullPath), getScanStore().get(fullPath)], stats);
+      if (cached) {
+        items.push({ ...cached, fileModifiedAt: stats.mtimeMs });
         onProgress(items.length);
         continue;
       }
@@ -769,7 +784,8 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
         format: ext.replace('.', ''),
         fileSize: stats.size,
         fileModifiedAt: stats.mtimeMs,
-        dateAdded: stats.mtimeMs,
+        // No first-seen date here: the renderer sets it when the item first joins the
+        // library (carryForwardFirstSeenAt). The file's mtime is not when it was added.
         dirName: parentDirName,
         durationSeconds,
         coverUrl: await findOrExtractCover(fullPath, mediaType, dirPath, entry.name, audioPictureData),
@@ -789,8 +805,27 @@ async function scanRecursive(dirPath: string, items: ScannedItem[], onProgress: 
 }
 
 ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
-  registerAllowedRoot(folderPath);
+  // The renderer names the folder but cannot widen what the app reads: script
+  // in the page (a sanitiser miss in a book, say) could otherwise register C:\
+  // and read any file through file:readBytes.
+  if (typeof folderPath !== 'string' || !isAllowedPath(folderPath)) {
+    logError('scanner', `Refused to scan a folder the user has not chosen: ${String(folderPath)}`);
+    return [];
+  }
   registerAllowedRoot(getCoversDir());
+  await getScanStore().load();
+
+  // An unplugged drive or an offline network share is not an empty folder.
+  // Scanning it as one took its books off the shelf (and, when it came back,
+  // they returned as newly added), so answer with what its last scan found.
+  const reachable = await fs.promises.readdir(folderPath).then(
+    () => true,
+    () => false
+  );
+  if (!reachable) {
+    logError('scanner', `Folder unreachable, keeping its last scan: ${folderPath}`);
+    return getScanStore().inFolder(folderPath);
+  }
 
   const items: ScannedItem[] = [];
   let lastSent = 0;
@@ -807,6 +842,10 @@ ipcMain.handle('scanner:scanFolder', async (event, folderPath: string) => {
   // Pair companion audio and text editions.
   pairCompanions(items);
 
+  const store = getScanStore();
+  store.replaceFolder(folderPath, items);
+  await store.save().catch((err) => logError('scan-cache-save', err));
+
   return items;
 });
 
@@ -819,6 +858,75 @@ function getStorageFilePath() {
 let pendingWrite: unknown = null;
 let writeTimer: ReturnType<typeof setTimeout> | null = null;
 
+/*
+ * Edits made outside the app.
+ *
+ * The MCP server (mcp-server/) edits the library file directly: progress,
+ * bookmarks, collections. The app's next save, about once a second during
+ * playback, used to write its own copy straight over them. So this process
+ * remembers what it last wrote (`libraryBase`) and the file's stamp afterwards;
+ * any other stamp means another process wrote the file. That edit goes to the
+ * renderer, which merges it (src/lib/libraryMerge.ts) and saves again. Saves
+ * sent before it had merged carry an older `libraryGeneration` and are dropped,
+ * so none can undo the edit.
+ */
+let libraryBase: unknown = null;
+let knownStamp: { mtimeMs: number; size: number } | null = null;
+let libraryGeneration = 0;
+let outsideEditCheck: Promise<boolean> = Promise.resolve(false);
+let watchingLibraryFile = false;
+
+async function stampOf(file: string): Promise<{ mtimeMs: number; size: number } | null> {
+  try {
+    const { mtimeMs, size } = await fs.promises.stat(file);
+    return { mtimeMs, size };
+  } catch {
+    return null;
+  }
+}
+
+/** Hand any edit another process made to the library file to the renderer. True if there was one. */
+function checkForOutsideEdit(): Promise<boolean> {
+  outsideEditCheck = outsideEditCheck.then(
+    async () => {
+      const file = getStorageFilePath();
+      const stamp = await stampOf(file);
+      const changed = stamp && (!knownStamp || stamp.mtimeMs !== knownStamp.mtimeMs || stamp.size !== knownStamp.size);
+      if (!changed) return false;
+
+      let external: unknown;
+      try {
+        external = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+      } catch {
+        return false; // Unreadable for now; look again on the next check.
+      }
+      knownStamp = stamp;
+      libraryGeneration += 1;
+      // Saves already queued predate the merge; the renderer sends a merged one.
+      pendingWrite = null;
+      if (writeTimer) {
+        clearTimeout(writeTimer);
+        writeTimer = null;
+      }
+      mainWindow?.webContents.send('library:outside-edit', {
+        base: libraryBase,
+        external,
+        generation: libraryGeneration,
+      });
+      libraryBase = external;
+      return true;
+    },
+    () => false
+  );
+  return outsideEditCheck;
+}
+
+function watchLibraryFile() {
+  if (watchingLibraryFile) return;
+  watchingLibraryFile = true;
+  fs.watchFile(getStorageFilePath(), { interval: 1000 }, () => void checkForOutsideEdit());
+}
+
 /**
  * Write via a temp file then rename.
  *
@@ -830,6 +938,8 @@ async function writeStoreAtomically(data: unknown) {
   const temp = `${target}.${process.pid}.tmp`;
   await fs.promises.writeFile(temp, JSON.stringify(data), 'utf8');
   await fs.promises.rename(temp, target);
+  knownStamp = await stampOf(target);
+  libraryBase = data;
 }
 
 async function flushStore() {
@@ -837,6 +947,9 @@ async function flushStore() {
     clearTimeout(writeTimer);
     writeTimer = null;
   }
+  if (pendingWrite === null) return;
+  // An edit another process made since our last write is merged first, not written over.
+  if (await checkForOutsideEdit()) return;
   if (pendingWrite === null) return;
 
   const data = pendingWrite;
@@ -849,6 +962,10 @@ async function flushStore() {
 }
 
 ipcMain.handle('storage:load', async () => {
+  // A (re)loaded renderer starts from what is on disk now.
+  libraryGeneration = 0;
+  knownStamp = await stampOf(getStorageFilePath());
+  watchLibraryFile();
   try {
     const filePath = getStorageFilePath();
     if (fs.existsSync(filePath)) {
@@ -906,16 +1023,26 @@ ipcMain.handle('storage:load', async () => {
       registerAllowedRoot(getCoversDir());
       // Drop shelf thumbnails no book uses any more.
       void getThumbnails().prune(coverPathsOf((migrated.items || []) as ScannedItem[]));
-      return {
+      const loaded = {
         ...migrated,
         collections: Array.isArray(migrated.collections) ? migrated.collections : [],
       };
+      libraryBase = loaded;
+      return loaded;
     }
   } catch (err) {
     logError('storage-load', err);
+    // The empty library returned below would be saved over this file on the next change.
+    const copy = await keepUnreadableLibrary(getStorageFilePath()).catch((copyErr) => {
+      logError('storage-load-backup', copyErr);
+      return null;
+    });
+    if (copy) logError('storage-load', `Library file could not be read; a copy was kept at ${copy}`);
   }
   registerAllowedRoot(getCoversDir());
-  return { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
+  const empty = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
+  libraryBase = empty;
+  return empty;
 });
 
 /**
@@ -925,8 +1052,14 @@ ipcMain.handle('storage:load', async () => {
  * means steady listening costs one write per second instead of one per
  * `timeupdate` event, each of which serialises the whole library.
  */
-ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }) => {
-  for (const folder of data?.folders ?? []) registerAllowedRoot(folder);
+ipcMain.handle('storage:save', async (_event, data: { folders?: string[]; items?: ScannedItem[] }, generation?: number) => {
+  // Sent before the renderer merged the latest outside edit: writing it would undo that edit.
+  if ((generation ?? 0) !== libraryGeneration) return true;
+  // Folders are granted by the folder picker, not by saving. Keep a folder the
+  // user never chose out of the file too, or it would be granted at next launch.
+  if (Array.isArray(data?.folders)) {
+    data = { ...data, folders: data.folders.filter((folder) => typeof folder === 'string' && isAllowedPath(folder)) };
+  }
   for (const item of data?.items ?? []) {
     if (item.filePath) {
       itemMetadataCache.set(item.filePath, item);

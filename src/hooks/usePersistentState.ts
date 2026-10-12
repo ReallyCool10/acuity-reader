@@ -27,11 +27,15 @@ export function usePersistentState<T>(key: string, initial: T): [T, (value: T | 
 }
 
 /**
- * Returns a stable callback that runs at most once per `intervalMs`, always
- * firing a trailing call so the final value is never dropped.
+ * Call `fn` at most once per `intervalMs`: the first call runs at once, later
+ * ones within the interval collapse into one trailing call with the latest
+ * arguments.
  *
- * Used for progress persistence: `timeupdate` fires roughly four times a second,
- * and writing the whole library on every tick pins the disk during playback.
+ * A call still waiting when the component unmounts, or when the window is
+ * closed, is made rather than dropped. It is usually the last thing worth
+ * saving: the reading position just before a book was closed, or a change made
+ * a moment before quitting. (Closing the window does not unmount React, so
+ * `pagehide` covers that case.)
  */
 export function useThrottledCallback<Args extends unknown[]>(
   fn: (...args: Args) => void,
@@ -46,29 +50,36 @@ export function useThrottledCallback<Args extends unknown[]>(
     fnRef.current = fn;
   }, [fn]);
 
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    []
-  );
+  const run = useCallback(() => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    lastRun.current = Date.now();
+    const next = pending.current;
+    pending.current = null;
+    if (next) fnRef.current(...next);
+  }, []);
 
-  return useCallback(
+  const call = useCallback(
     (...args: Args) => {
       pending.current = args;
       const elapsed = Date.now() - lastRun.current;
-
-      const run = () => {
-        lastRun.current = Date.now();
-        timer.current = null;
-        const next = pending.current;
-        pending.current = null;
-        if (next) fnRef.current(...next);
-      };
-
       if (elapsed >= intervalMs) run();
       else if (!timer.current) timer.current = setTimeout(run, intervalMs - elapsed);
     },
-    [intervalMs]
+    [intervalMs, run]
   );
+
+  const flush = useCallback(() => {
+    if (pending.current) run();
+  }, [run]);
+
+  useEffect(() => {
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      flush();
+    };
+  }, [flush]);
+
+  return call;
 }

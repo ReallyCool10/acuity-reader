@@ -51,3 +51,18 @@ export function isCacheHit(
 
   return Math.abs(cachedMtime - stat.mtimeMs) < 1000;
 }
+
+/**
+ * The first candidate that can be reused for this file, or undefined.
+ *
+ * Callers pass the saved library's item first, so metadata the user edited is
+ * kept, then the scanner's own record of the file. A grouped audiobook is saved
+ * under its first track's path but with the size of all its tracks, so it fails
+ * the size check and the track's own record is used instead.
+ */
+export function findCacheHit<T extends CacheCandidate>(
+  candidates: Array<T | undefined | null>,
+  stat: FileStatLike
+): T | undefined {
+  return candidates.find((candidate): candidate is T => isCacheHit(candidate, stat));
+}

@@ -71,6 +71,9 @@ or `folder.jpg` in a folder holding a single work; and, for a PDF with none of t
 page, drawn in the background. EPUB covers chosen by earlier versions are corrected on the next
 **Rescan library**.
 
+A folder that cannot be reached when you rescan (an unplugged drive, an offline network share)
+keeps the books its last scan found, with their progress and dates, until it is back.
+
 ### Data
 
 Library state (folders, indexed items, progress, bookmarks) is a single JSON document in
@@ -84,15 +87,20 @@ they are per-install chrome rather than user content.
 
 `src/lib/epub.ts` reads the archive in **spine order** taken from the OPF package document —
 not zip entry order, which is arbitrary and interleaves front matter with chapters. Chapter
-markup is sanitised (scripts, styles, remote resources and inline event handlers removed) and
-embedded images are rewritten to blob URLs drawn from inside the archive.
+markup is sanitised (scripts, styles, inline event handlers, script URLs and anything that would
+load from outside the book removed, remote images included) and embedded images are rewritten to
+blob URLs drawn from inside the archive. Links to other parts of the book are rewritten for the
+reader to follow (footnotes scroll within the chapter; links to another chapter open it at the
+target); web and mail links open in the default browser or mail client. The window itself never
+navigates away from the app.
 
 ---
 
 ## Privacy
 
 Acuity is a local application: your library is never uploaded, and the app has no account,
-telemetry or analytics.
+telemetry or analytics. Apart from the online voices below, it makes no network requests: its
+fonts are bundled, and books are shown without anything they would load from the web.
 
 **One feature is an exception, and it is on by default.** Read-aloud offers two engines:
 
@@ -113,9 +121,15 @@ Two further caveats about the online engine:
   undocumented and not intended for third-party clients, so it may change or stop working without
   notice. The fallback to the system voice exists partly for that reason.
 - It requires an internet connection. The system voice does not.
+- While an online voice is selected, opening a book also fetches the list of available voices
+  from the same service (once per session; no book text is sent). With the system voice
+  selected, the app does not contact it at all.
 
 The bundled MCP server communicates over **stdio only** — it opens no network port and is reachable
 solely by a local process that launches it.
+
+Changes made through the MCP server (progress, bookmarks, collections) appear in the app while it
+is open, and are merged with the app's own changes rather than saved over.
 
 ---
 
@@ -123,7 +137,8 @@ solely by a local process that launches it.
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 20 or newer
+- [Node.js](https://nodejs.org/) 22.22.2 or newer on the 22 line, or 24.15 or newer (see
+  `engines` in `package.json`). On Node 20 the test runner cannot start.
 
 ### Install and run
 
@@ -144,7 +159,26 @@ npm start
 ```
 
 On Windows, `AcuityReader.cmd` and `run.vbs` launch an installed checkout directly; both resolve
-paths relative to themselves, so the repository can live anywhere.
+paths relative to themselves, so the repository can live anywhere. They run the built app, so run
+`npm run build` before the first launch.
+
+### Updating
+
+Quit Acuity first. Closing the window quits it, but if it was hidden with the tray icon it is
+still running: right-click the tray icon and choose **Quit Acuity**. Then, in the checkout:
+
+```bash
+git pull
+npm install       # picks up new or changed dependencies
+npm run build
+```
+
+Launch it again with `run.vbs`, `AcuityReader.cmd` or `npm start`. If you installed it with the
+setup program instead, run `npm run dist` after `npm install` and run the new installer from
+`dist-packages/`; it installs over the old version.
+
+Your library, reading progress, bookmarks and collections live in `%APPDATA%\Acuity Reader`, not
+in the checkout or the install folder, so updating never touches them.
 
 ---
 

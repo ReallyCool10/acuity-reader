@@ -283,7 +283,9 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
     const constituentTracks: AudioTrack[] = [];
     let totalFileSize = 0;
     let latestModified = sortedTracks[0].fileModifiedAt ?? sortedTracks[0].dateAdded ?? 0;
-    let earliestFirstSeen = sortedTracks[0].firstSeenAt ?? sortedTracks[0].dateAdded ?? Date.now();
+    // First-seen dates only: `dateAdded` on freshly scanned files used to hold their
+    // modification time, which dated a newly added audiobook by its files' age.
+    let earliestFirstSeen = sortedTracks[0].firstSeenAt ?? Date.now();
 
     for (let i = 0; i < sortedTracks.length; i++) {
       const item = sortedTracks[i];
@@ -296,7 +298,7 @@ export function groupMultiFileAudiobooks(items: MediaItem[]): MediaItem[] {
       if (itemMod > latestModified) {
         latestModified = itemMod;
       }
-      const itemSeen = item.firstSeenAt ?? item.dateAdded;
+      const itemSeen = item.firstSeenAt;
       if (typeof itemSeen === 'number' && !Number.isNaN(itemSeen) && itemSeen < earliestFirstSeen) {
         earliestFirstSeen = itemSeen;
       }
