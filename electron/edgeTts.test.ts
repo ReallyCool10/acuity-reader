@@ -1,7 +1,20 @@
 import { describe, it, expect } from 'vitest';
-import { generateSecMsGec, DEFAULT_EDGE_VOICES, TRUSTED_CLIENT_TOKEN, escapeXml } from './edgeTts';
+import { generateSecMsGec, generateMuid, DEFAULT_EDGE_VOICES, TRUSTED_CLIENT_TOKEN, escapeXml } from './edgeTts';
 
 describe('electron/edgeTts', () => {
+  describe('generateMuid', () => {
+    it('produces a 32-character uppercase hex string', () => {
+      const muid = generateMuid();
+      expect(muid).toMatch(/^[0-9A-F]{32}$/);
+    });
+
+    it('generates unique values on subsequent calls', () => {
+      const muid1 = generateMuid();
+      const muid2 = generateMuid();
+      expect(muid1).not.toBe(muid2);
+    });
+  });
+
   describe('generateSecMsGec', () => {
     it('produces a 64-character uppercase hex hash', async () => {
       const token = await generateSecMsGec(TRUSTED_CLIENT_TOKEN, 1726950000000);

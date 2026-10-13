@@ -26,7 +26,9 @@ export interface EdgeSynthesisResult {
 export const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
 const VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
 const WSS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
-const CHROMIUM_VERSION = '1-143.0.3650.96';
+const CHROMIUM_FULL_VERSION = '143.0.3650.75';
+const CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split('.')[0];
+const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
 const AUDIO_DELIM = 'Path:audio\r\n';
 const JSON_XML_DELIM = '\r\n\r\n';
 
@@ -37,13 +39,17 @@ const JSON_XML_DELIM = '\r\n\r\n';
 export async function generateSecMsGec(trustedClientToken: string = TRUSTED_CLIENT_TOKEN, timestampMs: number = Date.now()): Promise<string> {
   const ticks = Math.floor(timestampMs / 1000) + 11644473600;
   const rounded = ticks - (ticks % 300);
-  const windowsTicks = rounded * 10000000;
-  const data = new TextEncoder().encode(`${windowsTicks}${trustedClientToken}`);
+  const windowsTicks = BigInt(rounded) * 10000000n;
+  const data = new TextEncoder().encode(`${windowsTicks.toString()}${trustedClientToken}`);
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   return Array.from(new Uint8Array(hashBuffer))
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('')
     .toUpperCase();
+}
+
+export function generateMuid(): string {
+  return crypto.randomBytes(16).toString('hex').toUpperCase();
 }
 
 /** Fallback voices available even if network voice catalog discovery fails. */
@@ -69,7 +75,7 @@ export async function getEdgeVoices(): Promise<EdgeVoice[]> {
   try {
     const res = await fetch(VOICES_URL, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
+        'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
         'Pragma': 'no-cache',
         'Cache-Control': 'no-cache',
       },
@@ -172,7 +178,7 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
 
   const connectionId = crypto.randomUUID().replace(/-/g, '');
   const secMsGec = await generateSecMsGec(TRUSTED_CLIENT_TOKEN);
-  const synthUrl = `${WSS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${CHROMIUM_VERSION}&ConnectionId=${connectionId}`;
+  const synthUrl = `${WSS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}&ConnectionId=${connectionId}`;
 
   return new Promise<EdgeSynthesisResult>((resolve, reject) => {
     let ws: WebSocket | null = null;
@@ -216,12 +222,19 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
     }, 20000);
 
     try {
+      const muid = generateMuid();
       ws = new WebSocket(synthUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
-          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
           'Pragma': 'no-cache',
           'Cache-Control': 'no-cache',
+          'Origin': 'chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold',
+          'User-Agent': `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`,
+          'Accept-Encoding': 'gzip, deflate, br, zstd',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Sec-CH-UA': `" Not;A Brand";v="99", "Microsoft Edge";v="${CHROMIUM_MAJOR_VERSION}", "Chromium";v="${CHROMIUM_MAJOR_VERSION}"`,
+          'Sec-CH-UA-Mobile': '?0',
+          'Sec-CH-UA-Platform': '"Windows"',
+          'Cookie': `muid=${muid};`,
         },
       });
 
@@ -308,6 +321,10 @@ export async function synthesizeEdgeSpeech(options: SynthesisOptions): Promise<E
             });
           }
         }
+      });
+
+      ws.on('unexpected-response', (_req, res) => {
+        doReject(new Error(`Edge TTS handshake rejected: HTTP ${res.statusCode} ${res.statusMessage}`));
       });
 
       ws.on('error', (err) => {
