@@ -26,6 +26,7 @@ import {
   detectSeriesSuggestions,
   resolveCollectionMembers,
   getUnresolvedMemberCount,
+  createLibraryLookups,
   type SeriesSuggestion,
 } from './lib/collections';
 import {
@@ -412,6 +413,8 @@ export default function App() {
     [library.items, library.collections]
   );
 
+  const libraryLookups = useMemo(() => createLibraryLookups(library.items), [library.items]);
+
   const visibleCollections = useMemo(() => {
     const cols = library.collections || [];
     const query = searchQuery.trim().toLowerCase();
@@ -747,8 +750,8 @@ export default function App() {
               ) : (
                 <div className="library-grid">
                   {visibleCollections.map((col) => {
-                    const resolvedWorks = resolveCollectionMembers(col, library.items);
-                    const unresolvedCount = getUnresolvedMemberCount(col, library.items);
+                    const resolvedWorks = resolveCollectionMembers(col, libraryLookups);
+                    const unresolvedCount = getUnresolvedMemberCount(col, libraryLookups);
                     return (
                       <CollectionCard
                         key={col.id}

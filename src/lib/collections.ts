@@ -27,6 +27,33 @@ export interface SeriesSuggestion {
 }
 
 /**
+ * Pre-indexed maps and sets for O(1) library lookups during collection resolution.
+ */
+export interface LibraryLookups {
+  itemById: Map<string, MediaItem>;
+  itemByPath: Map<string, MediaItem>;
+  existingIds: Set<string>;
+}
+
+/**
+ * Creates pre-indexed lookup maps and sets from library items.
+ * Reusing lookups across multiple collection resolution calls avoids O(C * N) Map/Set allocations.
+ */
+export function createLibraryLookups(libraryItems: MediaItem[]): LibraryLookups {
+  const itemById = new Map<string, MediaItem>();
+  const itemByPath = new Map<string, MediaItem>();
+  const existingIds = new Set<string>();
+
+  for (const item of libraryItems) {
+    itemById.set(item.id, item);
+    itemByPath.set(item.filePath, item);
+    existingIds.add(item.id);
+  }
+
+  return { itemById, itemByPath, existingIds };
+}
+
+/**
  * Generate a unique, collision-resistant collection ID.
  */
 export function generateCollectionId(): string {
@@ -220,14 +247,21 @@ export function buildItemCollectionsMap(collections: Collection[]): Map<string, 
  */
 export function resolveCollectionMembers(
   collection: Collection,
-  libraryItems: MediaItem[]
+  libraryItems: MediaItem[] | LibraryLookups
 ): CollectionWorkItem[] {
-  const itemById = new Map<string, MediaItem>();
-  const itemByPath = new Map<string, MediaItem>();
+  let itemById: Map<string, MediaItem>;
+  let itemByPath: Map<string, MediaItem>;
 
-  for (const item of libraryItems) {
-    itemById.set(item.id, item);
-    itemByPath.set(item.filePath, item);
+  if (Array.isArray(libraryItems)) {
+    itemById = new Map();
+    itemByPath = new Map();
+    for (const item of libraryItems) {
+      itemById.set(item.id, item);
+      itemByPath.set(item.filePath, item);
+    }
+  } else {
+    itemById = libraryItems.itemById;
+    itemByPath = libraryItems.itemByPath;
   }
 
   const workItems: CollectionWorkItem[] = [];
@@ -299,9 +333,11 @@ export function resolveCollectionMembers(
  */
 export function getUnresolvedMemberCount(
   collection: Collection,
-  libraryItems: MediaItem[]
+  libraryItems: MediaItem[] | LibraryLookups
 ): number {
-  const existingIds = new Set(libraryItems.map((item) => item.id));
+  const existingIds = Array.isArray(libraryItems)
+    ? new Set(libraryItems.map((item) => item.id))
+    : libraryItems.existingIds;
   return collection.memberIds.filter((id) => !existingIds.has(id)).length;
 }
 

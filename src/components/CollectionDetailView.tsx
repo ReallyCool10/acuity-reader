@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowLeft,
   BookOpen,
@@ -18,6 +18,7 @@ import {
   removeMemberFromCollection,
   resolveCollectionMembers,
   getUnresolvedMemberCount,
+  createLibraryLookups,
   type CollectionWorkItem,
 } from '../lib/collections';
 import { resolveAudiobookProgress } from '../lib/audiobookGrouping';
@@ -51,8 +52,9 @@ export const CollectionDetailView: React.FC<CollectionDetailViewProps> = ({
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const resolvedWorks = resolveCollectionMembers(collection, libraryItems);
-  const unresolvedCount = getUnresolvedMemberCount(collection, libraryItems);
+  const libraryLookups = useMemo(() => createLibraryLookups(libraryItems), [libraryItems]);
+  const resolvedWorks = resolveCollectionMembers(collection, libraryLookups);
+  const unresolvedCount = getUnresolvedMemberCount(collection, libraryLookups);
   const isSeries = collection.kind === 'series';
 
   const handleToggleMember = (itemId: string, shouldInclude: boolean) => {
