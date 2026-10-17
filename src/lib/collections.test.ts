@@ -11,6 +11,7 @@ import {
   buildItemCollectionsMap,
   resolveCollectionMembers,
   getUnresolvedMemberCount,
+  createLibraryLookups,
   parseSeriesHintFromTitle,
   detectSeriesSuggestions,
 } from './collections';
@@ -224,6 +225,31 @@ describe('src/lib/collections - Member Resolution & Companion Deduplication', ()
     // Original collection still retains all 3 IDs
     expect(collection.memberIds).toEqual(['id-epub-1', offlineId, 'id-epub-2']);
     expect(getUnresolvedMemberCount(collection, libraryItems)).toBe(1);
+  });
+
+  it('supports pre-indexed LibraryLookups for O(1) repeated member resolution and unresolved count', () => {
+    const offlineId = 'offline-drive-book-999';
+    const collection = createCollection('Dune Saga', 'series', [
+      'id-epub-1',
+      'id-audio-1',
+      'id-epub-2',
+      offlineId,
+    ]);
+    const libraryItems = [epub1, audio1, epub2];
+
+    const lookups = createLibraryLookups(libraryItems);
+    expect(lookups.itemById.get('id-epub-1')).toBe(epub1);
+    expect(lookups.itemByPath.get(audio1.filePath)).toBe(audio1);
+    expect(lookups.existingIds.has('id-epub-2')).toBe(true);
+
+    const resolvedWithLookups = resolveCollectionMembers(collection, lookups);
+    const resolvedDirectly = resolveCollectionMembers(collection, libraryItems);
+    expect(resolvedWithLookups).toEqual(resolvedDirectly);
+
+    expect(getUnresolvedMemberCount(collection, lookups)).toBe(1);
+    expect(getUnresolvedMemberCount(collection, lookups)).toBe(
+      getUnresolvedMemberCount(collection, libraryItems)
+    );
   });
 });
 
