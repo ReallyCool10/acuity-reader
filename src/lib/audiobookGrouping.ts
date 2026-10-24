@@ -134,39 +134,55 @@ export function resolveAudiobookProgress(
 ): ProgressItem | undefined {
   if (!progressMap) return undefined;
 
-  // 1. Exact match on composite item ID
-  if (progressMap[item.id]) {
-    return progressMap[item.id];
+  // 1. Fast exact match on composite item ID ($O(1)$)
+  const exact = progressMap[item.id];
+  if (exact) {
+    return exact;
   }
 
-  // 2. Check constituent tracks for migration/seamless resume
-  if (item.tracks && item.tracks.length > 0) {
-    let bestProgress: ProgressItem | undefined;
-    let bestTrack: AudioTrack | undefined;
+  // Early return if the item has no constituent tracks to avoid useless checks
+  if (!item.tracks || item.tracks.length === 0) {
+    return undefined;
+  }
 
-    for (const track of item.tracks) {
-      const p = progressMap[track.id];
-      if (p && (!bestProgress || (p.lastPlayed ?? 0) > (bestProgress.lastPlayed ?? 0))) {
-        bestProgress = p;
-        bestTrack = track;
-      }
-    }
+  // 2. Check constituent tracks for migration/seamless resume.
+  // Optimization: Before looping through item.tracks ($O(N)$ track lookups per item on every render/sort),
+  // verify if progressMap has any entries. In V8, `for...in` on an empty object exits immediately ($O(1)$).
+  let hasAnyProgress = false;
+  for (const _key in progressMap) {
+    hasAnyProgress = true;
+    break;
+  }
+  if (!hasAnyProgress) {
+    return undefined;
+  }
 
-    if (bestProgress && bestTrack) {
-      const localCurrentTime = bestProgress.currentTime ?? 0;
-      const globalCurrentTime = bestTrack.offsetSeconds + localCurrentTime;
-      const totalDuration = item.durationSeconds && item.durationSeconds > 0 ? item.durationSeconds : 1;
-      return {
-        id: item.id,
-        currentTime: globalCurrentTime,
-        duration: totalDuration,
-        // 0-100, the scale every other writer and reader of ProgressItem uses.
-        // Returning 0-1 here hid half-read books from the Continue shelf, which
-        // only shows items above 1 percent.
-        percent: Math.min(100, Math.max(0, (globalCurrentTime / totalDuration) * 100)),
-        lastPlayed: bestProgress.lastPlayed,
-      };
+  let bestProgress: ProgressItem | undefined;
+  let bestTrack: AudioTrack | undefined;
+
+  for (let i = 0; i < item.tracks.length; i++) {
+    const track = item.tracks[i];
+    const p = progressMap[track.id];
+    if (p && (!bestProgress || (p.lastPlayed ?? 0) > (bestProgress.lastPlayed ?? 0))) {
+      bestProgress = p;
+      bestTrack = track;
     }
+  }
+
+  if (bestProgress && bestTrack) {
+    const localCurrentTime = bestProgress.currentTime ?? 0;
+    const globalCurrentTime = bestTrack.offsetSeconds + localCurrentTime;
+    const totalDuration = item.durationSeconds && item.durationSeconds > 0 ? item.durationSeconds : 1;
+    return {
+      id: item.id,
+      currentTime: globalCurrentTime,
+      duration: totalDuration,
+      // 0-100, the scale every other writer and reader of ProgressItem uses.
+      // Returning 0-1 here hid half-read books from the Continue shelf, which
+      // only shows items above 1 percent.
+      percent: Math.min(100, Math.max(0, (globalCurrentTime / totalDuration) * 100)),
+      lastPlayed: bestProgress.lastPlayed,
+    };
   }
 
   return undefined;
