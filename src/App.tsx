@@ -44,6 +44,13 @@ const CONTINUE_MIN_PERCENT = 1;
 const CONTINUE_MAX_PERCENT = 98;
 const CONTINUE_LIMIT = 12;
 
+/**
+ * Reusable collator for natural alphabetical title/author sorting.
+ * Hoisted outside component render to avoid re-constructing ICU collation state
+ * on every search keystroke, filter toggle, or playback progress update.
+ */
+const COLLATOR = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+
 export default function App() {
   const [library, setLibrary] = useState<LibraryState>(EMPTY_LIBRARY);
   const [searchQuery, setSearchQuery] = useState('');
@@ -443,46 +450,51 @@ export default function App() {
       );
     });
 
-    const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    if (sortKey === 'title') {
+      return filtered.sort((a, b) => COLLATOR.compare(a.title, b.title));
+    }
+    if (sortKey === 'author') {
+      return filtered.sort((a, b) => COLLATOR.compare(a.author, b.author) || COLLATOR.compare(a.title, b.title));
+    }
+    if (sortKey === 'added') {
+      return filtered.sort((a, b) => (b.firstSeenAt ?? b.dateAdded ?? 0) - (a.firstSeenAt ?? a.dateAdded ?? 0));
+    }
+
+    // Default 'recent' sort:
+    // Pre-extract lastPlayed timestamps in O(N) into a Map so the O(N log N) comparator
+    // doesn't repeatedly re-traverse composite audiobook tracks via resolveAudiobookProgress.
+    const playedMap = new Map<string, number>();
+    for (const item of filtered) {
+      const p = (resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id])?.lastPlayed ?? 0;
+      playedMap.set(item.id, p);
+    }
 
     return filtered.sort((a, b) => {
-      switch (sortKey) {
-        case 'title':
-          return collator.compare(a.title, b.title);
-        case 'author':
-          return collator.compare(a.author, b.author) || collator.compare(a.title, b.title);
-        case 'added':
-          return (b.firstSeenAt ?? b.dateAdded ?? 0) - (a.firstSeenAt ?? a.dateAdded ?? 0);
-        case 'recent':
-        default: {
-          // Unplayed titles sort after everything that has been opened.
-          const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
-          const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
-          if (aPlayed !== bPlayed) return bPlayed - aPlayed;
-          return collator.compare(a.title, b.title);
-        }
-      }
+      // Unplayed titles sort after everything that has been opened.
+      const aPlayed = playedMap.get(a.id) ?? 0;
+      const bPlayed = playedMap.get(b.id) ?? 0;
+      if (aPlayed !== bPlayed) return bPlayed - aPlayed;
+      return COLLATOR.compare(a.title, b.title);
     });
   }, [library.items, library.progress, activeFilter, searchQuery, sortKey]);
 
   const continueItems = useMemo(() => {
     if (searchQuery.trim() || activeFilter !== 'all') return [];
 
-    return library.items
-      .filter((item) => {
-        const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
-        return (
-          progress &&
-          progress.percent > CONTINUE_MIN_PERCENT &&
-          progress.percent < CONTINUE_MAX_PERCENT
-        );
-      })
-      .sort((a, b) => {
-        const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
-        const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
-        return bPlayed - aPlayed;
-      })
-      .slice(0, CONTINUE_LIMIT);
+    // Pair items with their resolved progress once in O(N) rather than re-resolving
+    // in both the filter pass and repeatedly inside the sort comparator.
+    const candidates: { item: MediaItem; lastPlayed: number }[] = [];
+    for (const item of library.items) {
+      const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
+      if (progress && progress.percent > CONTINUE_MIN_PERCENT && progress.percent < CONTINUE_MAX_PERCENT) {
+        candidates.push({ item, lastPlayed: progress.lastPlayed ?? 0 });
+      }
+    }
+
+    return candidates
+      .sort((a, b) => b.lastPlayed - a.lastPlayed)
+      .slice(0, CONTINUE_LIMIT)
+      .map((c) => c.item);
   }, [library.items, library.progress, searchQuery, activeFilter]);
 
   /* -------------------------------------------------------- collections */
