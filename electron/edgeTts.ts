@@ -28,7 +28,7 @@ const VOICES_URL = `https://speech.platform.bing.com/consumer/speech/synthesize/
 const WSS_URL = 'wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1';
 const CHROMIUM_FULL_VERSION = '143.0.3650.75';
 const CHROMIUM_MAJOR_VERSION = CHROMIUM_FULL_VERSION.split('.')[0];
-const SEC_MS_GEC_VERSION = `1-${CHROMIUM_FULL_VERSION}`;
+const SEC_MS_GEC_VERSION = `2-${CHROMIUM_FULL_VERSION}`;
 const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROMIUM_MAJOR_VERSION}.0.0.0 Safari/537.36 Edg/${CHROMIUM_MAJOR_VERSION}.0.0.0`;
 /** Per-attempt limit; a healthy request for an 800-character chunk takes 1-3 s. */
 const ATTEMPT_TIMEOUT_MS = 15000;
@@ -87,23 +87,76 @@ export class EdgeTtsError extends Error {
   }
 }
 
-/**
- * Generates the Sec-MS-GEC authorization token using Windows NT epoch ticks
- * aligned to 5-minute rolling windows.
+/** The v1 token input: Windows file-time ticks, rounded down to five minutes, then the client token. */
+export function secMsGecInput(trustedClientToken: string, timestampMs: number): string {
+  const seconds = Math.floor(timestampMs / 1000) + 11644473600;
+  const rounded = seconds - (seconds % 300);
+  return `${BigInt(rounded) * 10000000n}${trustedClientToken}`;
+}
+
+/*
+ * Sec-MS-GEC v2, required since late 2026 (v1 tokens are refused with 403):
+ * "<CS64 checksum>-<SHA-256>" of Edge's copyright line followed by the v1 input.
+ * Adapted from msedge-tts (MIT licence, github.com/Migushthe2nd/MsEdgeTTS),
+ * which worked it out from the analysis in github.com/rany2/edge-tts/pull/492.
  */
-export async function generateSecMsGec(
+const EDGE_COPYRIGHT = 'Copyright (C) Microsoft Corporation. All rights reserved.';
+const SWAP_FIRST = [0xef0569fb, 0x76f50f34, 0xc3efea97] as const;
+const SWAP_SECOND = [0xc31713db, 0x1881ce3c, 0x35bd1ec9] as const;
+const MIX_FIRST = [0xcf98b111, 0x87085b9f, 0x12ceb96d, 0x257e1d83] as const;
+const MIX_SECOND = [0xa27416f5, 0xd38396ff, 0x7c932b89, 0xbfa49f69] as const;
+
+const swapHalves = (value: number) => ((value << 16) | (value >>> 16)) >>> 0;
+
+function swapTerm(word: number, key: number, [swappedWord, swappedSum, swappedProduct]: readonly number[]): number {
+  const sum = Math.imul(word, key) + Math.imul(swapHalves(word), swappedWord);
+  const product = Math.imul(swapHalves(sum), swappedSum) >>> 0;
+  return (Math.imul(swapHalves(product), swappedProduct) + product) >>> 0;
+}
+
+function swapAndMultiply(value: number, multipliers: readonly number[]): number {
+  for (const multiplier of multipliers) value = Math.imul(swapHalves(value), multiplier) >>> 0;
+  return value;
+}
+
+/** The 64-bit checksum keyed by the first eight bytes of the SHA-256 digest. */
+function cs64(message: Uint8Array, digest: Uint8Array): Buffer {
+  const digestView = new DataView(digest.buffer, digest.byteOffset, digest.byteLength);
+  const firstKey = (digestView.getUint32(0, true) | 1) >>> 0;
+  const secondKey = (digestView.getUint32(4, true) | 1) >>> 0;
+  // Read as little-endian 32-bit word pairs, zero-padded to a whole pair.
+  const padded = new Uint8Array(Math.ceil(message.length / 8) * 8);
+  padded.set(message);
+  const words = new DataView(padded.buffer);
+  let swapSum = 0;
+  let lastSwap = 0;
+  let mix = 0;
+  let mixSum = 0;
+  for (let offset = 0; offset < padded.length; offset += 8) {
+    const first = words.getUint32(offset, true);
+    const second = words.getUint32(offset + 4, true);
+    const firstSwap = swapTerm(first, firstKey, SWAP_FIRST);
+    lastSwap = swapTerm(second, secondKey, SWAP_SECOND);
+    swapSum = (swapSum + firstSwap + lastSwap) >>> 0;
+    mix = swapAndMultiply(Math.imul(mix + first, firstKey), MIX_FIRST);
+    mixSum = (mixSum + mix) >>> 0;
+    mix = swapAndMultiply(Math.imul(mix + second, secondKey), MIX_SECOND);
+    mixSum = (mixSum + mix) >>> 0;
+  }
+  const checksum = Buffer.alloc(8);
+  checksum.writeUInt32LE((lastSwap ^ mix) >>> 0, 0);
+  checksum.writeUInt32LE((swapSum ^ mixSum) >>> 0, 4);
+  return checksum;
+}
+
+/** The Sec-MS-GEC (v2) token for the five-minute window containing `timestampMs`. */
+export function generateSecMsGec(
   trustedClientToken: string = TRUSTED_CLIENT_TOKEN,
   timestampMs: number = Date.now() + clockSkewMs
-): Promise<string> {
-  const ticks = Math.floor(timestampMs / 1000) + 11644473600;
-  const rounded = ticks - (ticks % 300);
-  const windowsTicks = BigInt(rounded) * 10000000n;
-  const data = new TextEncoder().encode(`${windowsTicks.toString()}${trustedClientToken}`);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')
-    .toUpperCase();
+): string {
+  const message = Buffer.from(EDGE_COPYRIGHT + secMsGecInput(trustedClientToken, timestampMs), 'ascii');
+  const digest = crypto.createHash('sha256').update(message).digest();
+  return `${cs64(message, digest).toString('hex')}-${digest.toString('hex')}`.toUpperCase();
 }
 
 export function generateMuid(): string {
@@ -132,7 +185,7 @@ export async function getEdgeVoices(): Promise<EdgeVoice[]> {
 
   try {
     const fetchVoices = async () =>
-      fetch(`${VOICES_URL}&Sec-MS-GEC=${await generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`, {
+      fetch(`${VOICES_URL}&Sec-MS-GEC=${generateSecMsGec()}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`, {
         headers: {
           'User-Agent': USER_AGENT,
           'Accept': '*/*',
@@ -389,7 +442,7 @@ async function attemptSynthesis(
   createSocket: SocketFactory
 ): Promise<EdgeSynthesisResult> {
   const connectionId = crypto.randomUUID().replace(/-/g, '');
-  const secMsGec = await generateSecMsGec();
+  const secMsGec = generateSecMsGec();
   const url =
     `${WSS_URL}?TrustedClientToken=${TRUSTED_CLIENT_TOKEN}` +
     `&ConnectionId=${connectionId}&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=${SEC_MS_GEC_VERSION}`;

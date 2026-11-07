@@ -34,9 +34,17 @@ describe('electron/edgeTts', () => {
   });
 
   describe('generateSecMsGec', () => {
-    it('produces a 64-character uppercase hex hash', async () => {
-      const token = await generateSecMsGec(TRUSTED_CLIENT_TOKEN, 1726950000000);
-      expect(token).toMatch(/^[0-9A-F]{64}$/);
+    it('produces a v2 token: a 16-hex checksum, then the 64-hex SHA-256', () => {
+      const token = generateSecMsGec(TRUSTED_CLIENT_TOKEN, 1726950000000);
+      expect(token).toMatch(/^[0-9A-F]{16}-[0-9A-F]{64}$/);
+    });
+
+    it('matches a token the live service accepted', () => {
+      // Pinned output of the algorithm Microsoft's endpoint accepted in a live test in November
+      // 2026 (v1 tokens were refused with 403), so a refactor cannot change it unnoticed.
+      expect(generateSecMsGec(TRUSTED_CLIENT_TOKEN, 1726950000000)).toBe(
+        '1BEC8F1F02C80625-FD9316C72E60BB73FBB4D1C66D27A0AFDF6D9684D1F982C5DCD8ADA76C501F8C'
+      );
     });
 
     it('is deterministic for the same timestamp and token', async () => {
@@ -212,7 +220,7 @@ describe('synthesizeEdgeSpeech', () => {
     expect(result.boundaries).toEqual([{ type: 'word', offsetMs: 0, durationMs: 200, text: 'Hi', length: 2 }]);
     expect(service.sent[0][0]).toContain('Path:speech.config');
     expect(service.sent[0][1]).toContain("Microsoft Server Speech Text to Speech Voice (en-US, GuyNeural)");
-    expect(service.urls[0]).toMatch(/Sec-MS-GEC=[0-9A-F]{64}&Sec-MS-GEC-Version=1-/);
+    expect(service.urls[0]).toMatch(/Sec-MS-GEC=[0-9A-F]{16}-[0-9A-F]{64}&Sec-MS-GEC-Version=2-/);
   });
 
   it('corrects for a wrong PC clock when the service answers 403, and retries', async () => {
@@ -229,7 +237,7 @@ describe('synthesizeEdgeSpeech', () => {
     expect(service.attempts()).toBe(2);
     expect(Math.abs(getClockSkewMs() - 10 * 60_000)).toBeLessThan(5000);
     // The retry carried a different token, built from the corrected clock.
-    expect(service.urls[1].match(/Sec-MS-GEC=(\w+)/)?.[1]).not.toBe(service.urls[0].match(/Sec-MS-GEC=(\w+)/)?.[1]);
+    expect(service.urls[1].match(/Sec-MS-GEC=([\w-]+)/)?.[1]).not.toBe(service.urls[0].match(/Sec-MS-GEC=([\w-]+)/)?.[1]);
     setClockSkewMs(0);
   });
 
