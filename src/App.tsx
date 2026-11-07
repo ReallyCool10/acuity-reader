@@ -44,6 +44,10 @@ const CONTINUE_MIN_PERCENT = 1;
 const CONTINUE_MAX_PERCENT = 98;
 const CONTINUE_LIMIT = 12;
 
+// Reused collator for natural sort: constructing Intl.Collator is expensive in V8,
+// so keep a single module-level instance rather than instantiating on every sort.
+const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+
 export default function App() {
   const [library, setLibrary] = useState<LibraryState>(EMPTY_LIBRARY);
   const [searchQuery, setSearchQuery] = useState('');
@@ -443,7 +447,18 @@ export default function App() {
       );
     });
 
-    const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    // Performance optimization: Precompute lastPlayed timestamps in O(N) when sorting by 'recent'.
+    // Calling resolveAudiobookProgress() inside the sort comparator executes O(N log N) times,
+    // where each call iterates over multi-file audiobook constituent tracks. Precomputing reduces
+    // track-iteration lookups from ~O(N log N) comparisons to a single O(N) pass.
+    let lastPlayedMap: Map<string, number> | undefined;
+    if (sortKey === 'recent') {
+      lastPlayedMap = new Map();
+      for (const item of filtered) {
+        const played = (resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id])?.lastPlayed ?? 0;
+        lastPlayedMap.set(item.id, played);
+      }
+    }
 
     return filtered.sort((a, b) => {
       switch (sortKey) {
@@ -456,8 +471,8 @@ export default function App() {
         case 'recent':
         default: {
           // Unplayed titles sort after everything that has been opened.
-          const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
-          const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
+          const aPlayed = lastPlayedMap?.get(a.id) ?? 0;
+          const bPlayed = lastPlayedMap?.get(b.id) ?? 0;
           if (aPlayed !== bPlayed) return bPlayed - aPlayed;
           return collator.compare(a.title, b.title);
         }
@@ -468,21 +483,28 @@ export default function App() {
   const continueItems = useMemo(() => {
     if (searchQuery.trim() || activeFilter !== 'all') return [];
 
-    return library.items
-      .filter((item) => {
-        const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
-        return (
-          progress &&
-          progress.percent > CONTINUE_MIN_PERCENT &&
-          progress.percent < CONTINUE_MAX_PERCENT
-        );
-      })
-      .sort((a, b) => {
-        const aPlayed = (resolveAudiobookProgress(a, library.progress) ?? library.progress[a.id])?.lastPlayed ?? 0;
-        const bPlayed = (resolveAudiobookProgress(b, library.progress) ?? library.progress[b.id])?.lastPlayed ?? 0;
-        return bPlayed - aPlayed;
-      })
-      .slice(0, CONTINUE_LIMIT);
+    // Performance optimization: Retain resolved progress alongside candidate items.
+    // This avoids resolving progress twice (once during filtering and repeatedly in the comparator).
+    const qualifying: { item: MediaItem; lastPlayed: number }[] = [];
+
+    for (const item of library.items) {
+      const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
+      if (
+        progress &&
+        progress.percent > CONTINUE_MIN_PERCENT &&
+        progress.percent < CONTINUE_MAX_PERCENT
+      ) {
+        qualifying.push({
+          item,
+          lastPlayed: progress.lastPlayed ?? 0,
+        });
+      }
+    }
+
+    return qualifying
+      .sort((a, b) => b.lastPlayed - a.lastPlayed)
+      .slice(0, CONTINUE_LIMIT)
+      .map((entry) => entry.item);
   }, [library.items, library.progress, searchQuery, activeFilter]);
 
   /* -------------------------------------------------------- collections */
