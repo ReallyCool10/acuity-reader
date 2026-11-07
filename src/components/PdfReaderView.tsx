@@ -15,6 +15,7 @@ import { searchInText, type SearchResultItem } from '../lib/search';
 import { FALLBACK_VOICE_CHOICES } from '../lib/narration';
 import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
+  FALLBACK_NOTICE_SUFFIX,
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
   TTS_PRIVACY_NOTICE,
@@ -91,6 +92,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
   const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
   const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
+  /** Why narration is on the system voice when an online one was chosen; null when it is not. */
+  const [narrationNotice, setNarrationNotice] = useState<string | null>(null);
 
   const narratingPageRef = useRef<number>(1);
   const engineRef = useRef<NarrationEngine | null>(null);
@@ -525,6 +528,9 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
             setNarratingPage(null);
           }
         },
+        onFallback: (reason) => {
+          setNarrationNotice(`${reason} ${FALLBACK_NOTICE_SUFFIX}`);
+        },
         onSectionAdvance: (nextPage) => {
           narratingPageRef.current = nextPage;
           setNarratingPage(nextPage);
@@ -546,6 +552,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const startNarration = useCallback(
     (fromPage: number = currentPage, overrideVoice?: string, overrideRate?: number) => {
       if (!pdfDoc || !pdfInfo) return;
+      setNarrationNotice(null);
       if (fromPage < 1 || fromPage > pdfInfo.numPages) {
         stopNarration();
         return;
@@ -564,6 +571,7 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const handleVoiceChange = useCallback(
     (newVoice: string) => {
       setTtsVoice(newVoice);
+      setNarrationNotice(null);
       engineRef.current?.setVoice(newVoice);
     },
     [setTtsVoice]
@@ -716,6 +724,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
 
   return (
     <ReaderShell
+      notice={narrationNotice}
+      onDismissNotice={() => setNarrationNotice(null)}
       title={cleanTitleString(pdfInfo?.title || '') || cleanTitleString(item.title) || item.title}
       subtitle={totalPages > 0 ? `Page ${currentPage} of ${totalPages}` : item.author}
       theme={theme}

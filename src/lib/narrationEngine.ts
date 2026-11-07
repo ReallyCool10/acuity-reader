@@ -7,7 +7,7 @@ import {
   splitNarrationChunks,
   wordAt,
 } from './narration';
-import { isOnlineVoice } from './tts';
+import { describeSynthesisError, isOnlineVoice } from './tts';
 
 /*
  * The engine deliberately has no voice-ID constant of its own. It once defined
@@ -57,6 +57,12 @@ export interface NarrationEngineEvents {
   onBoundary?: (charIndex: number, sectionIndex: number, length: number) => void;
   onSectionAdvance?: (sectionIndex: number) => void;
   onError?: (error: unknown) => void;
+  /**
+   * The online voice failed and narration carried on with the system voice.
+   * `reason` is a sentence fit to show the reader. Without this the switch to
+   * the Windows voice was silent, and looked like the online voice was never used.
+   */
+  onFallback?: (reason: string) => void;
 }
 
 export interface NarrationEngineDependencies {
@@ -424,6 +430,7 @@ export class NarrationEngine {
               this.currentBlobUrl = null;
             }
             console.warn('Edge TTS playback failed, falling back to local speech');
+            this.events.onFallback?.('The online voice could not be played on this device.');
             this.playLocalSpeech(text, this.currentCharIndex, sectionIndex, abortController);
           };
 
@@ -435,6 +442,7 @@ export class NarrationEngine {
           this.stopFrameLoop();
           if (abortController.signal.aborted) return;
           console.warn('Edge TTS synthesis failed, falling back to local speech:', err);
+          this.events.onFallback?.(describeSynthesisError(err));
           this.playLocalSpeech(text, this.currentCharIndex, sectionIndex, abortController);
         }
       };

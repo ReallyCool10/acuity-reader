@@ -21,3 +21,21 @@ export const TTS_PRIVACY_NOTICE =
 export function isOnlineVoice(voiceId: string): boolean {
   return voiceId !== LOCAL_VOICE_ID;
 }
+
+/**
+ * A reader-facing sentence for a failed online synthesis.
+ *
+ * Errors thrown in the main process reach the renderer wrapped as
+ * "Error invoking remote method 'tts:synthesizeEdge': EdgeTtsError: ...";
+ * only the last part means anything to a reader.
+ */
+export function describeSynthesisError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  const message = raw
+    .replace(/^Error invoking remote method '[^']*':\s*/, '')
+    .replace(/^(?:EdgeTts)?Error:\s*/, '')
+    .trim();
+  return message || "Microsoft's online voice is unavailable right now.";
+}
+
+export const FALLBACK_NOTICE_SUFFIX = 'Reading with the system voice for now.';

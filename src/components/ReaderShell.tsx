@@ -81,6 +81,10 @@ export interface ReaderShellProps {
   progressPercent: number;
   progressLabel?: string;
 
+  /** A one-line notice under the header, e.g. that narration fell back to the system voice. */
+  notice?: string | null;
+  onDismissNotice?: () => void;
+
   // Main scrollable content
   children: React.ReactNode;
 }
@@ -114,6 +118,8 @@ export const ReaderShell: React.FC<ReaderShellProps> = ({
   nextLabel = 'Next',
   progressPercent,
   progressLabel,
+  notice,
+  onDismissNotice,
   children,
 }) => {
   const [isTocOpen, setIsTocOpen] = useState(false);
@@ -618,6 +624,26 @@ export const ReaderShell: React.FC<ReaderShellProps> = ({
           <WindowControls />
         </div>
       </header>
+
+      {notice && (
+        <div
+          role="status"
+          className="flex shrink-0 items-center gap-2 border-b px-4 py-1.5 text-[11.5px]"
+          style={{ background: 'var(--reader-chrome)', borderColor: 'var(--reader-rule)', color: 'var(--reader-muted)' }}
+        >
+          <span className="min-w-0 flex-1">{notice}</span>
+          {onDismissNotice && (
+            <button
+              type="button"
+              onClick={onDismissNotice}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] transition-colors duration-150 hover:bg-black/10 dark:hover:bg-white/10"
+              aria-label="Dismiss notice"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* -------------------------------------------------------- CONTENT */}
       {children}

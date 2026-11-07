@@ -237,6 +237,32 @@ describe('NarrationEngine', () => {
     expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
   });
 
+  it('says why it fell back, instead of switching to the system voice silently', async () => {
+    mockSynthesizeEdge.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'tts:synthesizeEdge': EdgeTtsError: Can't reach Microsoft's speech service. Check the internet connection."
+      )
+    );
+    const onFallback = vi.fn();
+    const engine = createTestEngine({ onFallback });
+
+    await engine.start({ sectionIndex: 0 });
+    await vi.waitFor(() => expect(onFallback).toHaveBeenCalled());
+
+    expect(onFallback).toHaveBeenCalledWith("Can't reach Microsoft's speech service. Check the internet connection.");
+    expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
+  });
+
+  it('does not report a fallback when the online voice works', async () => {
+    const onFallback = vi.fn();
+    const engine = createTestEngine({ onFallback });
+
+    await engine.start({ sectionIndex: 0 });
+    await vi.waitFor(() => expect(mockAudio.play).toHaveBeenCalled());
+
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
   it('hot-swaps voice and rate while narrating', async () => {
     const engine = createTestEngine();
     await engine.start({ sectionIndex: 0 });

@@ -1183,7 +1183,13 @@ ipcMain.handle('tts:getEdgeVoices', async () => {
 
 /** Synthesize speech via Edge Neural TTS */
 ipcMain.handle('tts:synthesizeEdge', async (_event, options: SynthesisOptions) => {
-  return synthesizeEdgeSpeech(options);
+  try {
+    return await synthesizeEdgeSpeech(options);
+  } catch (err) {
+    // The reader falls back to the system voice and says why; the log keeps the detail.
+    logError('tts-synthesize', err);
+    throw err;
+  }
 });
 
 /** Return detected and installed MCP AI clients */

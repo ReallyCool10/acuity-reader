@@ -19,6 +19,7 @@ import {
 } from '../lib/narration';
 import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
 import {
+  FALLBACK_NOTICE_SUFFIX,
   LOCAL_VOICE_ID,
   LOCAL_VOICE_LABEL,
   isOnlineVoice,
@@ -88,6 +89,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
   const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
   const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
+  /** Why narration is on the system voice when an online one was chosen; null when it is not. */
+  const [narrationNotice, setNarrationNotice] = useState<string | null>(null);
   const engineRef = useRef<NarrationEngine | null>(null);
   const chapterIndexRef = useRef(chapterIndex);
   const currentCharIndexRef = useRef<number>(0);
@@ -277,6 +280,9 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
             updateVisualHighlight(map, charIdx, length);
           }
         },
+        onFallback: (reason) => {
+          setNarrationNotice(`${reason} ${FALLBACK_NOTICE_SUFFIX}`);
+        },
         onSectionAdvance: (nextChapterIdx) => {
           chapterIndexRef.current = nextChapterIdx;
           setChapterIndex(nextChapterIdx);
@@ -303,6 +309,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const startNarration = useCallback(
     (fromCharIndex: number = 0, overrideVoice?: string, overrideRate?: number) => {
       if (!proseRef.current && (!chapters[chapterIndex] || !chapters[chapterIndex].text)) return;
+      setNarrationNotice(null);
 
       const container = proseRef.current;
       if (container) {
@@ -329,6 +336,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const handleVoiceChange = useCallback(
     (newVoice: string) => {
       setTtsVoice(newVoice);
+      setNarrationNotice(null);
       engineRef.current?.setVoice(newVoice);
     },
     [setTtsVoice]
@@ -630,6 +638,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
 
   return (
     <ReaderShell
+      notice={narrationNotice}
+      onDismissNotice={() => setNarrationNotice(null)}
       title={bookMeta.title || cleanTitleString(item.title) || item.title}
       subtitle={currentChapter?.title ?? item.author}
       theme={theme}
