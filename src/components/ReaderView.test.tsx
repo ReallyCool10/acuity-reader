@@ -305,7 +305,7 @@ describe('ReaderView (EPUB)', () => {
     });
   });
 
-  it('does not contact the online speech service for its voice list when the system voice is chosen', async () => {
+  it('does not contact the online speech service just by opening a book, whichever voice is chosen', async () => {
     localStorage.setItem('acuity.reader.ttsVoice', JSON.stringify('system-local'));
     const root = createRoot(container);
     await act(async () => {
@@ -325,7 +325,8 @@ describe('ReaderView (EPUB)', () => {
     await act(async () => {
       online.render(<ReaderView item={sampleBook} onClose={vi.fn()} onProgressUpdate={vi.fn()} onAddBookmark={vi.fn()} />);
     });
-    expect(window.electronAPI?.getEdgeVoices).toHaveBeenCalledTimes(1);
+    // The voice list is fetched only when the voice picker is opened on its Online side.
+    expect(window.electronAPI?.getEdgeVoices).not.toHaveBeenCalled();
     await act(async () => {
       online.unmount();
     });

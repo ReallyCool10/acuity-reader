@@ -194,6 +194,15 @@ export interface SynthesisOptions {
   pitch?: number;
 }
 
+export interface OfflineVoiceStatus {
+  /** The model is downloaded and verified. */
+  installed: boolean;
+  /** A download is running now. */
+  downloading: boolean;
+  /** Size of the download, in bytes. */
+  downloadBytes: number;
+}
+
 export interface McpClientInfo {
   id: 'claude' | 'cursor' | 'antigravity' | 'windsurf';
   name: string;

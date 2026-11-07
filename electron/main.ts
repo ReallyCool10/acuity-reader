@@ -8,7 +8,9 @@ import {
   Tray,
   Menu,
   nativeImage,
+  net,
   shell,
+  utilityProcess,
   nativeTheme,
   systemPreferences,
 } from 'electron';
@@ -28,6 +30,8 @@ import { pairCompanions } from './pairing';
 import { parseAudioChapters, extractChplFromFile } from './audio';
 import { cleanTitle, readPdfMetadata, readEpubMetadata } from './metadata';
 import { getEdgeVoices, synthesizeEdgeSpeech } from './edgeTts';
+import { downloadModel, getModelStatus, removeModel, type FetchLike } from './kokoroModel';
+import { createKokoroService, type KokoroService, type WorkerLike } from './kokoroService';
 import { createThumbnailStore, isJpeg, MAX_THUMB_BYTES, type ThumbnailStore } from './thumbnails';
 import { findEpubCover } from './epubCover';
 import { keepUnreadableLibrary } from './libraryFile';
@@ -1192,6 +1196,82 @@ ipcMain.handle('tts:synthesizeEdge', async (_event, options: SynthesisOptions) =
   }
 });
 
+/*
+ * The offline voice (Kokoro). The model lives in userData/voices and is
+ * downloaded only when the user asks; synthesis runs in a utility process
+ * (kokoroWorker.ts) so it cannot slow or crash the window.
+ */
+const voicesRoot = () => path.join(app.getPath('userData'), 'voices');
+let kokoro: KokoroService | null = null;
+let kokoroDownload: AbortController | null = null;
+
+function getKokoro(): KokoroService {
+  kokoro ??= createKokoroService({
+    fork: () =>
+      utilityProcess.fork(path.join(__dirname, 'kokoroWorker.js'), [voicesRoot()], {
+        serviceName: 'Acuity Reader offline voice',
+      }) as unknown as WorkerLike,
+  });
+  return kokoro;
+}
+
+ipcMain.handle('kokoro:status', async () => {
+  const status = await getModelStatus(voicesRoot());
+  return { ...status, downloading: kokoroDownload !== null };
+});
+
+/** Download the model, reporting progress. Only ever started by the user. */
+ipcMain.handle('kokoro:download', async (event) => {
+  if (kokoroDownload) return { ok: false, error: 'A download is already in progress.' };
+  const controller = new AbortController();
+  kokoroDownload = controller;
+  try {
+    await downloadModel(voicesRoot(), {
+      // net.fetch follows the system proxy settings, as Edge and Windows Update do.
+      fetch: ((url, init) => net.fetch(url, init)) as FetchLike,
+      signal: controller.signal,
+      onProgress: (progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send('kokoro:download-progress', progress);
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    if (controller.signal.aborted) return { ok: false, cancelled: true };
+    logError('kokoro-download', err);
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    kokoroDownload = null;
+  }
+});
+
+ipcMain.handle('kokoro:cancelDownload', async () => {
+  kokoroDownload?.abort();
+  return true;
+});
+
+ipcMain.handle('kokoro:remove', async () => {
+  kokoro?.stop();
+  await removeModel(voicesRoot());
+  return true;
+});
+
+ipcMain.handle('kokoro:synthesize', async (_event, options: SynthesisOptions) => {
+  if (typeof options?.text !== 'string' || typeof options.voice !== 'string') throw new Error('Invalid request.');
+  if (!(await getModelStatus(voicesRoot())).installed) {
+    throw new Error('The offline voice is not downloaded.');
+  }
+  try {
+    return await getKokoro().synthesize({
+      text: options.text.slice(0, 5000),
+      voice: options.voice,
+      speed: typeof options.rate === 'number' ? options.rate : 1,
+    });
+  } catch (err) {
+    logError('kokoro-synthesize', err);
+    throw err;
+  }
+});
+
 /** Return detected and installed MCP AI clients */
 ipcMain.handle('mcp:getClients', async () => {
   return getMcpClients();
@@ -1259,6 +1339,8 @@ app.on('activate', () => {
 
 // Any debounced save must reach disk before the process exits.
 app.on('before-quit', (event) => {
+  kokoro?.stop();
+  kokoroDownload?.abort();
   if (pendingWrite !== null) {
     event.preventDefault();
     void flushStore().finally(() => app.exit(0));

@@ -27,6 +27,7 @@ can be read as description rather than aspiration.
 | PDF reading, with outline, zoom and continuous scroll | Working |
 | In-book full-text search | Working |
 | Read-aloud narration with word-by-word highlighting | Working — **see [Privacy](#privacy)**, the default voices are online |
+| Offline natural voice (Kokoro), switchable with the online voices | Working — optional 92 MB download; word highlighting is estimated, so slightly less exact than online |
 | Bookmarks, with navigation | Working |
 | Sleep timer | Working |
 | Companion pairing of text and audio editions | Working (matched on normalised title) |
@@ -124,29 +125,50 @@ Acuity is a local application: your library is never uploaded, and the app has n
 telemetry or analytics. Apart from the online voices below, it makes no network requests: its
 fonts are bundled, and books are shown without anything they would load from the web.
 
-**One feature is an exception, and it is on by default.** Read-aloud offers two engines:
+**One feature is an exception, and it is on by default.** Read-aloud offers three engines, chosen
+with the **Online / Offline** switch in the reader's appearance menu:
 
 | Voice | Where synthesis happens | What leaves your machine |
 |:--|:--|:--|
 | **Online — Microsoft** (default) | Microsoft's servers | The text currently being read aloud |
-| **System voice** | This device | Nothing |
+| **Offline — Kokoro** (optional download) | This device | Nothing |
+| **Basic system voice** | This device | Nothing |
 
-The online voices sound considerably better, which is why they are the default, but choosing them
+The online voices sound the most natural, which is why they are the default, but choosing them
 means the passage being narrated is transmitted to a Microsoft speech endpoint over a WebSocket.
-If you are reading anything you would not send to a third party, pick **System voice** in the
-reader's appearance menu. The choice is remembered. If the online service cannot be reached or
-refuses a request, narration carries on with the system voice and the reader shows a notice
-saying why; the failure is also written to the app's error log.
+If you are reading anything you would not send to a third party, switch to **Offline**. The
+choice is remembered, and each side remembers its own voice.
 
-Two further caveats about the online engine:
+If the online service cannot be reached or refuses a request, narration carries on with the
+offline voice if it is installed, otherwise the basic system voice, and the reader shows a notice
+saying why; the failure is also written to the app's error log. Narration never falls back the
+other way: an offline voice never sends text online.
+
+About the online engine:
 
 - It talks to the endpoint that Microsoft Edge's own Read Aloud uses. That interface is
   undocumented and not intended for third-party clients, so it may change or stop working without
-  notice. The fallback to the system voice exists partly for that reason.
-- It requires an internet connection. The system voice does not.
-- While an online voice is selected, opening a book also fetches the list of available voices
-  from the same service (once per session; no book text is sent). With the system voice
-  selected, the app does not contact it at all.
+  notice (in November 2026 it began requiring a new form of request token, which the app now
+  sends). The fallbacks exist partly for that reason.
+- It requires an internet connection.
+- While the Online side of the voice menu is open, the app fetches the list of available voices
+  from the same service (no book text is sent). Opening a book does not contact it.
+
+About the offline engine:
+
+- [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) (82M-parameter model, Apache-2.0), run with
+  ONNX Runtime in a background process, so it cannot slow or crash the window. It uses a few
+  hundred MB of memory while reading and is stopped after a few idle minutes.
+- The model is a one-time 92 MB download from Hugging Face, made only when you press **Download**
+  (in the voice menu, or Settings › Read Aloud), from a pinned revision and checked against its
+  SHA-256. Settings › Read Aloud removes it. The English voices (US and UK) ship with the app.
+- It runs faster than real time on a recent PC's processor and needs no graphics card; speech
+  starts after the first short sentence is ready.
+- Kokoro reports no word timings, so the highlight is estimated within each sentence and can run
+  slightly ahead or behind; each sentence starts in step.
+- Licensing note for anyone redistributing the app: the `phonemizer` package that converts text
+  to phonemes for Kokoro compiles in eSpeak NG, which is GPL-3.0, although the package itself is
+  labelled Apache-2.0.
 
 The bundled MCP server communicates over **stdio only** — it opens no network port and is reachable
 solely by a local process that launches it.

@@ -61,10 +61,12 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
    need the app object at import time. A static `import { app } from 'electron'` forces anything
    importing that module - including a unit test of pure logic - to resolve the Electron binary.
    Inject host values instead, as `mcpSetup.configureMcpRuntime` does.
-10. **Read-aloud has two engines, and the default one is online.** Microsoft's neural voices
-    transmit the text being narrated to a Microsoft endpoint; the system voice does not. Any
-    change to engine selection, defaults or fallback must keep the disclosure in the reader's
-    voice picker and the Privacy section of `README.md` accurate.
+10. **Read-aloud has three engines, and the default one is online.** Microsoft's neural voices
+    transmit the text being narrated to a Microsoft endpoint; Kokoro (offline, `kokoro:` voice IDs)
+    and the system voice do not. `engineOf` in `src/lib/tts.ts` is the privacy boundary: only an
+    online ID may reach `synthesizeEdge`. Fallback runs online → offline → system, never towards
+    online. Any change to engine selection, defaults or fallback must keep the disclosure in
+    `VoicePicker` and the Privacy section of `README.md` accurate.
 11. **Item IDs must not depend on anything that routinely changes.** Progress, bookmarks and
     collection members are all keyed by item ID, so an ID change orphans all three silently.
     Multi-file audiobook IDs (`computeAudiobookGroupId`) are derived from the raw album tag or
@@ -109,10 +111,16 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     `loadLibraryState` spreads the parsed file for that reason.
 20. **The online voice follows Edge's protocol exactly** (`electron/edgeTts.ts`): plain SSML with
     one voice and one prosody element, no `<break>` or extra namespaces, long-form voice names,
-    length-prefixed binary frames. A 403 is retried once after correcting the clock from the
+    length-prefixed binary frames, and the v2 `Sec-MS-GEC` token (v1 is refused with 403). A 403 is retried once after correcting the clock from the
     server's `Date` header. A failure falls back to the system voice and must be reported to the
     reader (`onFallback`), never silently.
-21. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
+21. **The offline voice runs in a utility process** (`electron/kokoroWorker.ts`, owned by
+    `kokoroService.ts`): ONNX inference uses every core and ~700 MB, and a native crash must not take
+    the window down. Its packages (`kokoro-js`, `@huggingface/transformers`, `onnxruntime-node`, ...)
+    are external in `vite.config.ts` and unpacked from the asar in `electron-builder.json`; never
+    bundle them. The model is downloaded only on the user's request, from the pinned revision in
+    `electron/kokoroModel.ts`, and verified by SHA-256; the worker runs with remote models disabled.
+22. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
     `vite.config.ts`), the second line of defence behind the EPUB sanitiser: script runs only from
     the app's own files, so no inline handler or `javascript:` URL can run. Never add
     `'unsafe-inline'` or `'unsafe-eval'` to `script-src`. The dev server does not apply it (hot

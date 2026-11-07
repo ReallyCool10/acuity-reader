@@ -6,7 +6,7 @@ import { ContinueShelf } from './components/ContinueShelf';
 import { BookCard } from './components/BookCard';
 import { AudioPlayerBar } from './components/AudioPlayerBar';
 import { ReaderView } from './components/ReaderView';
-import { SettingsModal } from './components/SettingsModal';
+import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { CollectionCard } from './components/CollectionCard';
 import { CollectionDetailView } from './components/CollectionDetailView';
@@ -66,11 +66,11 @@ export default function App() {
   const [sortKey, setSortKey] = usePersistentState<SortKey>('acuity.sortKey', 'recent');
   const [appTheme, setAppTheme] = usePersistentState<AppTheme>('acuity.app.theme', 'system');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<'theme' | 'folders' | 'mcp'>('folders');
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('folders');
   const [isScanning, setIsScanning] = useState(false);
   const [scanCount, setScanCount] = useState(0);
 
-  const handleOpenSettings = (tab: 'theme' | 'folders' | 'mcp' = 'folders') => {
+  const handleOpenSettings = (tab: SettingsTab = 'folders') => {
     setSettingsTab(tab);
     setIsSettingsOpen(true);
   };

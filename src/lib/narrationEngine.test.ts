@@ -8,7 +8,8 @@ import {
   type NarrationEngineDependencies,
 } from './narrationEngine';
 import type { EdgeSynthesisResult } from '../types';
-import { LOCAL_VOICE_ID as PICKER_LOCAL_VOICE_ID } from './tts';
+import { LOCAL_VOICE_ID as PICKER_LOCAL_VOICE_ID, engineOf, isOnlineVoice } from './tts';
+import { offlineChunks } from './narrationEngine';
 
 describe('NarrationEngine', () => {
   let mockSource: NarrationSource;
@@ -85,8 +86,9 @@ describe('NarrationEngine', () => {
     revokedUrls = [];
   });
 
-  function createTestEngine(events = {}) {
+  function createTestEngine(events = {}, extraDeps: Partial<NarrationEngineDependencies> = {}) {
     return new NarrationEngine(mockSource, events, {
+      ...extraDeps,
       createAudio: () => mockAudio as unknown as HTMLAudioElement,
       speechSynthesis: mockSpeechSynthesis as unknown as SpeechSynthesis,
       synthesizeEdge: mockSynthesizeEdge as NarrationEngineDependencies['synthesizeEdge'],
@@ -249,7 +251,7 @@ describe('NarrationEngine', () => {
     await engine.start({ sectionIndex: 0 });
     await vi.waitFor(() => expect(onFallback).toHaveBeenCalled());
 
-    expect(onFallback).toHaveBeenCalledWith("Can't reach Microsoft's speech service. Check the internet connection.");
+    expect(onFallback).toHaveBeenCalledWith("Can't reach Microsoft's speech service. Check the internet connection.", 'system');
     expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
   });
 
@@ -407,6 +409,73 @@ describe('NarrationEngine', () => {
 
       expect(mockSpeechSynthesis.speak).toHaveBeenCalled();
       expect(cancelled.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('offline voice (Kokoro)', () => {
+    it('is not an online voice, so it never sends text to Microsoft', async () => {
+      expect(engineOf('kokoro:bf_emma')).toBe('offline');
+      expect(isOnlineVoice('kokoro:bf_emma')).toBe(false);
+      const synthesizeOffline = vi.fn(async ({ text }: { text: string; voice: string; rate: number }) => ({
+        audioBase64: 'b2ZmbGluZQ==',
+        mimeType: 'audio/wav',
+        boundaries: [{ offsetMs: 0, durationMs: 300, text: text.split(' ')[0], length: 5, type: 'word' as const }],
+      }));
+      const engine = createTestEngine({}, { synthesizeOffline });
+
+      await engine.start({ sectionIndex: 0, voice: 'kokoro:bf_emma' });
+      await vi.waitFor(() => expect(mockAudio.play).toHaveBeenCalled());
+
+      expect(mockSynthesizeEdge).not.toHaveBeenCalled();
+      // The worker takes the bare Kokoro voice name.
+      expect(synthesizeOffline.mock.calls[0][0].voice).toBe('bf_emma');
+    });
+
+    it('falls back to the system voice if the offline voice fails', async () => {
+      const synthesizeOffline = vi.fn().mockRejectedValue(new Error('The offline voice is not downloaded.'));
+      const onFallback = vi.fn();
+      const engine = createTestEngine({ onFallback }, { synthesizeOffline });
+
+      await engine.start({ sectionIndex: 0, voice: 'kokoro:af_heart' });
+      await vi.waitFor(() => expect(mockSpeechSynthesis.speak).toHaveBeenCalled());
+
+      expect(onFallback).toHaveBeenCalledWith('The offline voice is not downloaded.', 'system');
+      expect(mockSynthesizeEdge).not.toHaveBeenCalled();
+    });
+
+    it('takes over from a failed online voice when it is installed', async () => {
+      mockSynthesizeEdge.mockRejectedValue(new Error('HTTP 403'));
+      const synthesizeOffline = vi.fn(async ({ text }: { text: string; voice: string; rate: number }) => ({
+        audioBase64: 'b2ZmbGluZQ==',
+        mimeType: 'audio/wav',
+        boundaries: [{ offsetMs: 0, durationMs: 300, text: text.split(' ')[0], length: 5, type: 'word' as const }],
+      }));
+      const onFallback = vi.fn();
+      const engine = createTestEngine({ onFallback }, { synthesizeOffline });
+
+      await engine.start({ sectionIndex: 0, voice: 'en-GB-SoniaNeural', offlineFallbackVoice: 'kokoro:bf_emma' });
+      await vi.waitFor(() => expect(synthesizeOffline).toHaveBeenCalled());
+
+      expect(onFallback).toHaveBeenCalledWith('HTTP 403', 'offline');
+      expect(synthesizeOffline.mock.calls[0][0].voice).toBe('bf_emma');
+      expect(mockSpeechSynthesis.speak).not.toHaveBeenCalled();
+    });
+
+    it('starts with a short first piece so speech begins quickly, and covers the whole text', () => {
+      const text = Array.from({ length: 30 }, (_, i) => `This is sentence number ${i} of the chapter.`).join(' ');
+      const chunks = offlineChunks(text, 0);
+      expect(chunks[0].text.length).toBeLessThanOrEqual(120);
+      expect(chunks.slice(1).every((c) => c.text.length <= 400)).toBe(true);
+      expect(chunks.map((c) => c.text).join(' ')).toBe(text);
+      for (const c of chunks) expect(text.slice(c.startChar, c.endChar).trim()).toBe(c.text);
+    });
+
+    it('starts from a given position', () => {
+      const text = 'First sentence here. Second sentence here. Third one.';
+      const from = text.indexOf('Second');
+      const chunks = offlineChunks(text, from);
+      expect(chunks[0].text.startsWith('Second')).toBe(true);
+      expect(chunks[0].startChar).toBe(from);
     });
   });
 });

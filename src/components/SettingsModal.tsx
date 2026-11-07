@@ -11,6 +11,7 @@ import {
   Palette,
   RefreshCw,
   RotateCcw,
+  AudioLines,
   Sparkles,
   Sun,
   Trash2,
@@ -18,8 +19,9 @@ import {
 } from 'lucide-react';
 import type { AppTheme, CatalogEntry, McpClientInfo } from '../types';
 import { isInsideFolder } from '../lib/catalog';
+import { OfflineVoiceSettings } from './VoicePicker';
 
-export type SettingsTab = 'theme' | 'folders' | 'mcp';
+export type SettingsTab = 'theme' | 'folders' | 'voices' | 'mcp';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -266,6 +268,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </button>
           <button
             type="button"
+            onClick={() => setActiveTab('voices')}
+            className={`flex items-center gap-1.5 border-b-2 py-2.5 px-3 text-[12px] font-medium transition-all ${
+              activeTab === 'voices'
+                ? 'border-[var(--accent)] font-semibold text-[var(--accent)]'
+                : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            }`}
+          >
+            <AudioLines className="h-3.5 w-3.5" />
+            Read Aloud
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveTab('mcp')}
             className={`flex items-center gap-1.5 border-b-2 py-2.5 px-3 text-[12px] font-medium transition-all ${
               activeTab === 'mcp'
@@ -495,6 +509,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           )}
 
           {/* TAB 3: INDEPENDENT AI & MCP INTEGRATION CARD */}
+          {activeTab === 'voices' && <OfflineVoiceSettings />}
+
           {activeTab === 'mcp' && (
             <div className="space-y-5">
               {/* MCP Overview */}

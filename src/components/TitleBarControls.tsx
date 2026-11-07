@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Check, FolderOpen, Loader2, Palette, Pin, PinOff, RefreshCw, Settings } from 'lucide-react';
+import { AudioLines, Bot, Check, FolderOpen, Loader2, Palette, Pin, PinOff, RefreshCw, Settings } from 'lucide-react';
+import type { SettingsTab } from './SettingsModal';
 import { AcuityLogo } from './AcuityLogo';
 import { useDismissable } from '../hooks/useDismissable';
 
 interface TitleBarControlsProps {
-  onOpenSettings: (tab?: 'theme' | 'folders' | 'mcp') => void;
+  onOpenSettings: (tab?: SettingsTab) => void;
   onRescan: () => void;
   isScanning: boolean;
   scanCount: number;
@@ -132,6 +133,20 @@ export const TitleBarControls: React.FC<TitleBarControlsProps> = ({
               </div>
             </button>
 
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                onOpenSettings('voices');
+                setIsMenuOpen(false);
+              }}
+              className="menu-item"
+            >
+              <div className="flex items-center gap-2.5">
+                <AudioLines className="h-3.5 w-3.5" />
+                <span>Read aloud voices</span>
+              </div>
+            </button>
             <button
               type="button"
               role="menuitem"

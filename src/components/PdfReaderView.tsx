@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Play, Square, RotateCcw } from 'lucide-react';
-import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
 import {
   extractPdfPageText,
   getPdfInfo,
@@ -12,16 +12,10 @@ import {
 import { PAGE_CACHE_BUDGET_PIXELS, PixelBudgetCache, releaseCanvas } from '../lib/pageCache';
 import type * as pdfjsLib from 'pdfjs-dist';
 import { searchInText, type SearchResultItem } from '../lib/search';
-import { FALLBACK_VOICE_CHOICES } from '../lib/narration';
 import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
-import {
-  FALLBACK_NOTICE_SUFFIX,
-  LOCAL_VOICE_ID,
-  LOCAL_VOICE_LABEL,
-  TTS_PRIVACY_NOTICE,
-  VOICE_GROUP_LOCAL,
-  VOICE_GROUP_ONLINE,
-} from '../lib/tts';
+import { DEFAULT_ONLINE_VOICE, fallbackSuffix } from '../lib/tts';
+import { useOfflineVoice } from '../hooks/useOfflineVoice';
+import { useLastOfflineVoice, VoicePicker } from './VoicePicker';
 import { cleanTitleString } from '../lib/metadata';
 import { usePersistentState, useThrottledCallback } from '../hooks/usePersistentState';
 import { ReaderShell, Section, Stepper, type ReadingTheme } from './ReaderShell';
@@ -90,28 +84,17 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
   const [isNarrating, setIsNarrating] = useState(false);
   const [narratingPage, setNarratingPage] = useState<number | null>(null);
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
-  const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
-  const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
+  const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', DEFAULT_ONLINE_VOICE);
+  const offlineVoice = useOfflineVoice();
+  const [lastOfflineVoice] = useLastOfflineVoice();
+  /** The online voice falls back to the offline one when it is installed. */
+  const offlineFallbackVoice = offlineVoice.installed ? lastOfflineVoice : null;
   /** Why narration is on the system voice when an online one was chosen; null when it is not. */
   const [narrationNotice, setNarrationNotice] = useState<string | null>(null);
 
   const narratingPageRef = useRef<number>(1);
   const engineRef = useRef<NarrationEngine | null>(null);
 
-  useEffect(() => {
-    if (window.electronAPI?.getEdgeVoices) {
-      window.electronAPI
-        .getEdgeVoices()
-        .then((voices) => {
-          if (voices && voices.length > 0) {
-            setEdgeVoices(voices);
-          }
-        })
-        .catch((err) => {
-          console.warn('Failed to load Edge voices:', err);
-        });
-    }
-  }, []);
 
   /* ------------------------------------------------------------ load document */
 
@@ -528,8 +511,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
             setNarratingPage(null);
           }
         },
-        onFallback: (reason) => {
-          setNarrationNotice(`${reason} ${FALLBACK_NOTICE_SUFFIX}`);
+        onFallback: (reason, to) => {
+          setNarrationNotice(`${reason} ${fallbackSuffix(to)}`);
         },
         onSectionAdvance: (nextPage) => {
           narratingPageRef.current = nextPage;
@@ -563,9 +546,10 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
         sectionIndex: fromPage,
         voice: overrideVoice ?? ttsVoice,
         rate: overrideRate ?? narrationRate,
+        offlineFallbackVoice,
       });
     },
-    [currentPage, narrationRate, pdfDoc, pdfInfo, stopNarration, ttsVoice]
+    [currentPage, narrationRate, offlineFallbackVoice, pdfDoc, pdfInfo, stopNarration, ttsVoice]
   );
 
   const handleVoiceChange = useCallback(
@@ -821,26 +805,8 @@ export const PdfReaderView: React.FC<PdfReaderViewProps> = ({
             </div>
           </Section>
 
-          <Section label="Voice">
-            <select
-              value={ttsVoice}
-              onChange={(e) => handleVoiceChange(e.target.value)}
-              className="w-full rounded-[var(--radius-sm)] border border-[var(--stroke-default)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] focus:border-[var(--accent)] focus:outline-none"
-            >
-              <optgroup label={VOICE_GROUP_ONLINE}>
-                {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {'label' in v ? (v as { label: string }).label : `${v.friendlyName || v.name} (${v.locale})`}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label={VOICE_GROUP_LOCAL}>
-                <option value={LOCAL_VOICE_ID}>{LOCAL_VOICE_LABEL}</option>
-              </optgroup>
-            </select>
-            <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-tertiary)]">
-              {TTS_PRIVACY_NOTICE}
-            </p>
+          <Section label="Read-aloud voice">
+            <VoicePicker voice={ttsVoice} onVoiceChange={handleVoiceChange} offline={offlineVoice} />
           </Section>
 
           <Section label="Reading speed">

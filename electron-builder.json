@@ -9,7 +9,19 @@
   "files": [
     "dist/**/*",
     "dist-electron/**/*",
-    "resources/**/*"
+    "resources/**/*",
+    "!node_modules/onnxruntime-node/bin/napi-v3/linux/**",
+    "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**",
+    "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**",
+    "!node_modules/onnxruntime-web/**",
+    "!node_modules/@huggingface/transformers/dist/*.map",
+    "!node_modules/@huggingface/transformers/dist/transformers.js",
+    "!node_modules/@huggingface/transformers/dist/transformers.min.js",
+    "!node_modules/@huggingface/transformers/dist/transformers.web*.js",
+    "!node_modules/@huggingface/transformers/dist/ort-wasm*",
+    "!node_modules/@huggingface/transformers/src/**",
+    "!node_modules/kokoro-js/dist/kokoro.web.js",
+    "!node_modules/kokoro-js/voices/{e,f,h,i,j,p,z}*.bin"
   ],
   "extraResources": [
     {
@@ -41,5 +53,10 @@
     "createDesktopShortcut": true,
     "createStartMenuShortcut": true,
     "shortcutName": "Acuity Reader"
-  }
+  },
+  "asarUnpack": [
+    "node_modules/onnxruntime-node/**",
+    "node_modules/sharp/**",
+    "node_modules/@img/**"
+  ]
 }

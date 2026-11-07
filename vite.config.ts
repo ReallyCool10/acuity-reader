@@ -51,7 +51,16 @@ export default defineConfig(() => ({
     contentSecurityPolicy(),
     electron({
       main: {
-        entry: "electron/main.ts",
+        // kokoroWorker runs in its own utility process (the offline voice).
+        entry: ["electron/main.ts", "electron/kokoroWorker.ts"],
+        vite: {
+          build: {
+            rolldownOptions: {
+              // Native ONNX runtime and its loaders must be required from node_modules, not bundled.
+              external: ["kokoro-js", "@huggingface/transformers", "onnxruntime-node", "onnxruntime-common", "phonemizer", "sharp"],
+            },
+          },
+        },
       },
       preload: {
         input: "electron/preload.ts",

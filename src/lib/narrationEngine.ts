@@ -1,5 +1,6 @@
 import type { EdgeSynthesisResult } from '../types';
 import {
+  type NarrationChunk,
   alignWordBoundaries,
   base64ToBlobUrl,
   findWordIndexAt,
@@ -7,7 +8,7 @@ import {
   splitNarrationChunks,
   wordAt,
 } from './narration';
-import { describeSynthesisError, isOnlineVoice } from './tts';
+import { describeSynthesisError, engineOf, offlineVoiceName } from './tts';
 
 /*
  * The engine deliberately has no voice-ID constant of its own. It once defined
@@ -58,18 +59,34 @@ export interface NarrationEngineEvents {
   onSectionAdvance?: (sectionIndex: number) => void;
   onError?: (error: unknown) => void;
   /**
-   * The online voice failed and narration carried on with the system voice.
-   * `reason` is a sentence fit to show the reader. Without this the switch to
-   * the Windows voice was silent, and looked like the online voice was never used.
+   * The chosen voice failed and narration carried on with another: `to` says
+   * which. `reason` is a sentence fit to show the reader. Without this the
+   * switch was silent, and looked like the chosen voice was never used.
    */
-  onFallback?: (reason: string) => void;
+  onFallback?: (reason: string, to: 'offline' | 'system') => void;
+}
+
+type Synthesizer = (params: { text: string; voice: string; rate: number }) => Promise<EdgeSynthesisResult>;
+
+/**
+ * Offline synthesis is slower than real time on some PCs at first, so it
+ * starts with one short piece to begin speaking quickly, then works in
+ * medium chunks, each made while the one before it plays.
+ */
+export function offlineChunks(text: string, startChar: number): NarrationChunk[] {
+  const rest = startChar > 0 ? text.slice(startChar) : text;
+  const [first] = splitNarrationChunks(rest, 120, startChar);
+  if (!first) return [];
+  return [first, ...splitNarrationChunks(text.slice(first.endChar), 320, first.endChar)];
 }
 
 export interface NarrationEngineDependencies {
   createAudio?: () => HTMLAudioElement;
   speechSynthesis?: SpeechSynthesis;
   createSpeechUtterance?: (text: string) => SpeechSynthesisUtterance;
-  synthesizeEdge?: (params: { text: string; voice: string; rate: number }) => Promise<EdgeSynthesisResult>;
+  synthesizeEdge?: Synthesizer;
+  /** The offline voice; takes a bare Kokoro voice name ("bf_emma"). */
+  synthesizeOffline?: Synthesizer;
   revokeBlobUrl?: (url: string) => void;
   base64ToBlobUrl?: (base64: string, mimeType?: string) => string;
   requestFrame?: (callback: () => void) => number;
@@ -78,6 +95,11 @@ export interface NarrationEngineDependencies {
 
 export interface NarrationStartOptions {
   sectionIndex: number;
+  /**
+   * An offline voice ID to fall back to if the online voice fails, or null to
+   * fall back to the system voice. Set only when the offline voice is installed.
+   */
+  offlineFallbackVoice?: string | null;
   charOffset?: number;
   voice?: string;
   rate?: number;
@@ -93,6 +115,7 @@ export class NarrationEngine {
   private currentCharIndex = 0;
   private currentVoice = 'en-US-JennyNeural';
   private currentRate = 1.0;
+  private offlineFallbackVoice: string | null = null;
 
   private abortController: AbortController | null = null;
   private prefetchPromise: Promise<EdgeSynthesisResult> | null = null;
@@ -135,6 +158,7 @@ export class NarrationEngine {
 
     if (options.voice !== undefined) this.currentVoice = options.voice;
     if (options.rate !== undefined) this.currentRate = options.rate;
+    if (options.offlineFallbackVoice !== undefined) this.offlineFallbackVoice = options.offlineFallbackVoice;
     this.currentSectionIndex = options.sectionIndex;
     this.currentCharIndex = Math.max(0, options.charOffset ?? 0);
     this.isNarratingState = true;
@@ -316,21 +340,128 @@ export class NarrationEngine {
     this.lastReportedChar = -1;
     this.reportWordAt(text, startChar, sectionIndex);
 
-    const apiSynthesize =
+    const voice = this.currentVoice;
+    const engine = engineOf(voice);
+    const online = this.onlineSynthesizer();
+    const offline = this.offlineSynthesizer();
+
+    // Privacy boundary: only an online voice ID may send text off the machine (engineOf).
+    if (engine === 'online' && online) {
+      this.playSynthesized(sectionIndex, abortController, {
+        synthesize: online,
+        voice,
+        chunks: splitNarrationChunks(startChar > 0 ? text.slice(startChar) : text, 800, startChar),
+        onFail: (reason, fromChar) => this.fallBackFromOnline(reason, text, fromChar, sectionIndex, abortController),
+      });
+      return;
+    }
+    if (engine === 'offline' && offline) {
+      this.playOffline(voice, text, startChar, sectionIndex, abortController);
+      return;
+    }
+    if (engine === 'offline') {
+      this.events.onFallback?.('The offline voice is not available.', 'system');
+    }
+    this.playLocalSpeech(text, startChar, sectionIndex, abortController);
+  }
+
+  private onlineSynthesizer(): Synthesizer | undefined {
+    return (
       this.deps.synthesizeEdge ??
-      (typeof window !== 'undefined' ? window.electronAPI?.synthesizeEdge : undefined);
+      (typeof window !== 'undefined' ? window.electronAPI?.synthesizeEdge : undefined)
+    );
+  }
 
-    // Privacy boundary: only an online voice may send text off the machine.
-    const useEdge =
-      isOnlineVoice(this.currentVoice) &&
-      apiSynthesize !== undefined &&
-      typeof apiSynthesize === 'function';
+  private offlineSynthesizer(): Synthesizer | undefined {
+    return (
+      this.deps.synthesizeOffline ??
+      (typeof window !== 'undefined' ? window.electronAPI?.synthesizeOffline : undefined)
+    );
+  }
 
-    if (useEdge && apiSynthesize) {
-      const textToNarrate = startChar > 0 ? text.slice(startChar) : text;
-      const chunks = splitNarrationChunks(textToNarrate, 800, startChar);
+  private playOffline(
+    voice: string,
+    text: string,
+    fromChar: number,
+    sectionIndex: number,
+    abortController: AbortController
+  ): void {
+    const offline = this.offlineSynthesizer();
+    if (!offline) {
+      this.playLocalSpeech(text, fromChar, sectionIndex, abortController);
+      return;
+    }
+    const bounds = sentenceBoundsAt(text, Math.max(0, fromChar));
+    const startChar = fromChar > 0 ? bounds.start : 0;
+    this.playSynthesized(sectionIndex, abortController, {
+      synthesize: (params) => offline({ ...params, voice: offlineVoiceName(params.voice) }),
+      voice,
+      chunks: offlineChunks(text, startChar),
+      onFail: (reason, at) => {
+        this.events.onFallback?.(reason, 'system');
+        this.playLocalSpeech(text, at, sectionIndex, abortController);
+      },
+    });
+  }
 
-      if (chunks.length === 0) {
+  /** The online voice failed: carry on offline if the user has that voice, else with the system voice. */
+  private fallBackFromOnline(
+    reason: string,
+    text: string,
+    fromChar: number,
+    sectionIndex: number,
+    abortController: AbortController
+  ): void {
+    const offlineVoice = this.offlineFallbackVoice;
+    if (offlineVoice && this.offlineSynthesizer()) {
+      this.events.onFallback?.(reason, 'offline');
+      this.playOffline(offlineVoice, text, fromChar, sectionIndex, abortController);
+      return;
+    }
+    this.events.onFallback?.(reason, 'system');
+    this.playLocalSpeech(text, fromChar, sectionIndex, abortController);
+  }
+
+  /**
+   * Play `chunks` of the section with a neural engine, word by word, fetching
+   * the next chunk while the current one plays. `onFail` takes over from the
+   * current word if synthesis or playback fails.
+   */
+  private playSynthesized(
+    sectionIndex: number,
+    abortController: AbortController,
+    plan: {
+      synthesize: Synthesizer;
+      voice: string;
+      chunks: NarrationChunk[];
+      onFail: (reason: string, fromChar: number) => void;
+    }
+  ): void {
+    const { synthesize, voice, chunks, onFail } = plan;
+    this.prefetchPromise = null;
+
+    if (chunks.length === 0) {
+      if (this.source.hasNextSection(sectionIndex)) {
+        this.events.onSectionAdvance?.(sectionIndex + 1);
+        void this.playSection(sectionIndex + 1, 0, abortController);
+        return;
+      }
+      this.stop();
+      return;
+    }
+
+    if (!this.audio) {
+      this.audio = this.deps.createAudio?.() ?? new Audio();
+    }
+    const audio = this.audio;
+    // The speech service has already applied the speed; see setRate().
+    audio.playbackRate = 1;
+
+    const playChunkAt = async (chunkIndex: number) => {
+      if (abortController.signal.aborted) return;
+
+      if (chunkIndex >= chunks.length) {
+        // Finished all chunks in this section! Advance to next section if available.
         if (this.source.hasNextSection(sectionIndex)) {
           this.events.onSectionAdvance?.(sectionIndex + 1);
           return this.playSection(sectionIndex + 1, 0, abortController);
@@ -339,119 +470,84 @@ export class NarrationEngine {
         return;
       }
 
-      if (!this.audio) {
-        this.audio = this.deps.createAudio?.() ?? new Audio();
-      }
-      const audio = this.audio;
-      // The speech service has already applied the speed; see setRate().
-      audio.playbackRate = 1;
+      const chunk = chunks[chunkIndex];
 
-      const playChunkAt = async (chunkIndex: number) => {
+      try {
+        const synthesisResult = this.prefetchPromise
+          ? await this.prefetchPromise
+          : await synthesize({ text: chunk.text, voice, rate: this.currentRate });
+        this.prefetchPromise = null;
+
         if (abortController.signal.aborted) return;
 
-        if (chunkIndex >= chunks.length) {
-          // Finished all chunks in this section! Advance to next section if available.
-          if (this.source.hasNextSection(sectionIndex)) {
-            this.events.onSectionAdvance?.(sectionIndex + 1);
-            return this.playSection(sectionIndex + 1, 0, abortController);
-          }
-          this.stop();
-          return;
+        // Pre-fetch next chunk concurrently in background
+        if (chunkIndex + 1 < chunks.length) {
+          const nextPromise = synthesize({ text: chunks[chunkIndex + 1].text, voice, rate: this.currentRate });
+          nextPromise.catch(() => {});
+          this.prefetchPromise = nextPromise;
         }
 
-        const chunk = chunks[chunkIndex];
+        const words = alignWordBoundaries(chunk.text, synthesisResult.boundaries);
 
-        try {
-          const synthesisResult = this.prefetchPromise
-            ? await this.prefetchPromise
-            : await apiSynthesize({
-                text: chunk.text,
-                voice: this.currentVoice,
-                rate: this.currentRate,
-              });
-          this.prefetchPromise = null;
+        if (this.currentBlobUrl) {
+          this.revokeUrl(this.currentBlobUrl);
+          this.currentBlobUrl = null;
+        }
 
+        this.currentBlobUrl = this.convertBlobUrl(synthesisResult.audioBase64, synthesisResult.mimeType);
+        audio.src = this.currentBlobUrl;
+        audio.playbackRate = 1;
+
+        /*
+         * Follow the audio word by word. Checked on every animation frame:
+         * timeupdate alone fires only ~4 times a second, which is too coarse
+         * for words. timeupdate stays as a fallback for when frames are
+         * throttled (a hidden window). Each word is reported once.
+         */
+        const syncToAudio = () => {
           if (abortController.signal.aborted) return;
+          const index = findWordIndexAt(words, audio.currentTime * 1000);
+          if (index < 0) return;
+          const word = words[index];
+          this.reportWord(chunk.startChar + word.start, word.end - word.start, sectionIndex);
+        };
+        audio.ontimeupdate = syncToAudio;
+        this.startFrameLoop(syncToAudio);
 
-          // Pre-fetch next chunk concurrently in background
-          if (chunkIndex + 1 < chunks.length) {
-            const nextPromise = apiSynthesize({
-              text: chunks[chunkIndex + 1].text,
-              voice: this.currentVoice,
-              rate: this.currentRate,
-            });
-            nextPromise.catch(() => {});
-            this.prefetchPromise = nextPromise;
-          }
-
-          const words = alignWordBoundaries(chunk.text, synthesisResult.boundaries);
-
+        audio.onended = () => {
+          this.stopFrameLoop();
           if (this.currentBlobUrl) {
             this.revokeUrl(this.currentBlobUrl);
             this.currentBlobUrl = null;
           }
+          void playChunkAt(chunkIndex + 1);
+        };
 
-          this.currentBlobUrl = this.convertBlobUrl(
-            synthesisResult.audioBase64,
-            synthesisResult.mimeType
-          );
-          audio.src = this.currentBlobUrl;
-          audio.playbackRate = 1;
-
-          /*
-           * Follow the audio word by word. Checked on every animation frame:
-           * timeupdate alone fires only ~4 times a second, which is too coarse
-           * for words. timeupdate stays as a fallback for when frames are
-           * throttled (a hidden window). Each word is reported once.
-           */
-          const syncToAudio = () => {
-            if (abortController.signal.aborted) return;
-            const index = findWordIndexAt(words, audio.currentTime * 1000);
-            if (index < 0) return;
-            const word = words[index];
-            this.reportWord(chunk.startChar + word.start, word.end - word.start, sectionIndex);
-          };
-          audio.ontimeupdate = syncToAudio;
-          this.startFrameLoop(syncToAudio);
-
-          audio.onended = () => {
-            this.stopFrameLoop();
-            if (this.currentBlobUrl) {
-              this.revokeUrl(this.currentBlobUrl);
-              this.currentBlobUrl = null;
-            }
-            void playChunkAt(chunkIndex + 1);
-          };
-
-          audio.onerror = () => {
-            this.stopFrameLoop();
-            if (this.currentBlobUrl) {
-              this.revokeUrl(this.currentBlobUrl);
-              this.currentBlobUrl = null;
-            }
-            console.warn('Edge TTS playback failed, falling back to local speech');
-            this.events.onFallback?.('The online voice could not be played on this device.');
-            this.playLocalSpeech(text, this.currentCharIndex, sectionIndex, abortController);
-          };
-
-          await audio.play();
-        } catch (err) {
-          // play() can reject after the frame loop started; left running, it
-          // would keep pulling the highlight back to this clip's first word
-          // while the system voice reads on.
+        audio.onerror = () => {
           this.stopFrameLoop();
-          if (abortController.signal.aborted) return;
-          console.warn('Edge TTS synthesis failed, falling back to local speech:', err);
-          this.events.onFallback?.(describeSynthesisError(err));
-          this.playLocalSpeech(text, this.currentCharIndex, sectionIndex, abortController);
-        }
-      };
+          if (this.currentBlobUrl) {
+            this.revokeUrl(this.currentBlobUrl);
+            this.currentBlobUrl = null;
+          }
+          console.warn('Narration audio could not be played, falling back');
+          this.prefetchPromise = null;
+          onFail('The voice audio could not be played on this device.', this.currentCharIndex);
+        };
 
-      void playChunkAt(0);
-      return;
-    }
+        await audio.play();
+      } catch (err) {
+        // play() can reject after the frame loop started; left running, it
+        // would keep pulling the highlight back to this clip's first word
+        // while the fallback voice reads on.
+        this.stopFrameLoop();
+        if (abortController.signal.aborted) return;
+        this.prefetchPromise = null;
+        console.warn('Speech synthesis failed, falling back:', err);
+        onFail(describeSynthesisError(err), this.currentCharIndex);
+      }
+    };
 
-    this.playLocalSpeech(text, startChar, sectionIndex, abortController);
+    void playChunkAt(0);
   }
 
   private playLocalSpeech(

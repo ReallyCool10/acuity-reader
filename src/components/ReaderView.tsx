@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FolderOpen, Play, Square, RotateCcw } from 'lucide-react';
-import type { Bookmark as BookmarkType, MediaItem, ProgressItem, EdgeVoice } from '../types';
+import type { Bookmark as BookmarkType, MediaItem, ProgressItem } from '../types';
 import { parseEpub, type EpubChapter } from '../lib/epub';
 import { PdfReaderView } from './PdfReaderView';
 import { canRenderInReader } from '../lib/media';
@@ -14,19 +14,12 @@ import {
   wordAt,
   sentenceBoundsAt,
   isHighlightSupported,
-  FALLBACK_VOICE_CHOICES,
   type NarrationMap,
 } from '../lib/narration';
 import { NarrationEngine, type NarrationSource } from '../lib/narrationEngine';
-import {
-  FALLBACK_NOTICE_SUFFIX,
-  LOCAL_VOICE_ID,
-  LOCAL_VOICE_LABEL,
-  isOnlineVoice,
-  TTS_PRIVACY_NOTICE,
-  VOICE_GROUP_LOCAL,
-  VOICE_GROUP_ONLINE,
-} from '../lib/tts';
+import { DEFAULT_ONLINE_VOICE, fallbackSuffix } from '../lib/tts';
+import { useOfflineVoice } from '../hooks/useOfflineVoice';
+import { useLastOfflineVoice, VoicePicker } from './VoicePicker';
 import { cleanTitleString } from '../lib/metadata';
 import { searchInText, highlightAndScrollToMatch, type SearchResultItem } from '../lib/search';
 import { findChapterIndex, findFragment, parseBookTarget, scrollToElement } from '../lib/epubLinks';
@@ -87,33 +80,16 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
   const [typeface, setTypeface] = usePersistentState<'serif' | 'sans'>('acuity.reader.typeface', 'serif');
   const [theme, setTheme] = usePersistentState<ReadingTheme>('acuity.reader.theme', 'dark');
   const [narrationRate, setNarrationRate] = usePersistentState('acuity.reader.narrationRate', 1);
-  const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', 'en-US-JennyNeural');
-  const [edgeVoices, setEdgeVoices] = useState<EdgeVoice[]>([]);
+  const [ttsVoice, setTtsVoice] = usePersistentState<string>('acuity.reader.ttsVoice', DEFAULT_ONLINE_VOICE);
+  const offlineVoice = useOfflineVoice();
+  const [lastOfflineVoice] = useLastOfflineVoice();
+  /** The online voice falls back to the offline one when it is installed. */
+  const offlineFallbackVoice = offlineVoice.installed ? lastOfflineVoice : null;
   /** Why narration is on the system voice when an online one was chosen; null when it is not. */
   const [narrationNotice, setNarrationNotice] = useState<string | null>(null);
   const engineRef = useRef<NarrationEngine | null>(null);
   const chapterIndexRef = useRef(chapterIndex);
   const currentCharIndexRef = useRef<number>(0);
-
-  // The voice list comes from Microsoft's speech service. Someone who chose the
-  // system voice should not have the app contact it just by opening a book; the
-  // picker shows a built-in list of online voices until this one arrives.
-  const wantsOnlineVoices = isOnlineVoice(ttsVoice);
-  useEffect(() => {
-    if (!wantsOnlineVoices || !window.electronAPI?.getEdgeVoices) return;
-    let cancelled = false;
-    window.electronAPI
-      .getEdgeVoices()
-      .then((voices) => {
-        if (!cancelled && voices && voices.length > 0) setEdgeVoices(voices);
-      })
-      .catch((err) => {
-        console.warn('Failed to load Edge neural voices:', err);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [wantsOnlineVoices]);
 
   const currentChapter = chapters[chapterIndex];
 
@@ -280,8 +256,8 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
             updateVisualHighlight(map, charIdx, length);
           }
         },
-        onFallback: (reason) => {
-          setNarrationNotice(`${reason} ${FALLBACK_NOTICE_SUFFIX}`);
+        onFallback: (reason, to) => {
+          setNarrationNotice(`${reason} ${fallbackSuffix(to)}`);
         },
         onSectionAdvance: (nextChapterIdx) => {
           chapterIndexRef.current = nextChapterIdx;
@@ -328,9 +304,10 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
         charOffset: fromCharIndex,
         voice: overrideVoice ?? ttsVoice,
         rate: overrideRate ?? narrationRate,
+        offlineFallbackVoice,
       });
     },
-    [chapterIndex, chapters, narrationRate, saveNarrationProgress, ttsVoice, updateVisualHighlight]
+    [chapterIndex, chapters, narrationRate, offlineFallbackVoice, saveNarrationProgress, ttsVoice, updateVisualHighlight]
   );
 
   const handleVoiceChange = useCallback(
@@ -725,33 +702,7 @@ const EpubReaderView: React.FC<ReaderViewProps> = ({
           </Section>
 
           <Section label="Read Aloud voice">
-            <select
-              value={ttsVoice}
-              onChange={(e) => handleVoiceChange(e.target.value)}
-              aria-label="Read Aloud Voice"
-              className="w-full rounded-[var(--radius-sm)] border border-[var(--stroke-default)] bg-[var(--surface-raised)] px-2 py-1.5 text-[11px] text-[var(--text-primary)] transition-colors focus:border-[var(--accent)] focus:outline-none"
-            >
-              <optgroup label={VOICE_GROUP_ONLINE}>
-                {(edgeVoices.length > 0 ? edgeVoices : FALLBACK_VOICE_CHOICES).map((v) => {
-                  const value = 'name' in v ? v.name : (v as { name: string; label: string }).name;
-                  const label =
-                    'friendlyName' in v
-                      ? (v as EdgeVoice).friendlyName.replace('Microsoft ', '').replace(' Online (Natural)', '')
-                      : (v as { name: string; label: string }).label;
-                  return (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  );
-                })}
-              </optgroup>
-              <optgroup label={VOICE_GROUP_LOCAL}>
-                <option value={LOCAL_VOICE_ID}>{LOCAL_VOICE_LABEL}</option>
-              </optgroup>
-            </select>
-            <p className="mt-1.5 text-[10px] leading-snug text-[var(--text-tertiary)]">
-              {TTS_PRIVACY_NOTICE}
-            </p>
+            <VoicePicker voice={ttsVoice} onVoiceChange={handleVoiceChange} offline={offlineVoice} />
           </Section>
 
           <Section label="Narration speed">

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AppTheme, LibraryState, MediaItem, ThemeInfo, EdgeVoice, EdgeSynthesisResult, SynthesisOptions, McpClientInfo, McpSetupResult } from '../src/types';
+import type { AppTheme, LibraryState, MediaItem, ThemeInfo, EdgeVoice, EdgeSynthesisResult, SynthesisOptions, McpClientInfo, McpSetupResult, OfflineVoiceStatus } from '../src/types';
 
 export interface ScanProgress {
   count: number;
@@ -51,6 +51,15 @@ export interface ElectronAPI {
   onScanProgress: (callback: (progress: ScanProgress) => void) => () => void;
   getEdgeVoices: () => Promise<EdgeVoice[]>;
   synthesizeEdge: (options: SynthesisOptions) => Promise<EdgeSynthesisResult>;
+  /** The offline voice: whether its model is downloaded, and how big the download is. */
+  getOfflineVoiceStatus: () => Promise<OfflineVoiceStatus>;
+  /** Download the offline voice's model. Resolves when finished, failed or cancelled. */
+  downloadOfflineVoice: () => Promise<{ ok: boolean; cancelled?: boolean; error?: string }>;
+  cancelOfflineVoiceDownload: () => Promise<boolean>;
+  removeOfflineVoice: () => Promise<boolean>;
+  onOfflineVoiceDownloadProgress: (callback: (progress: { receivedBytes: number; totalBytes: number }) => void) => () => void;
+  /** Same result shape as synthesizeEdge; `voice` is a Kokoro voice name such as "af_heart". */
+  synthesizeOffline: (options: SynthesisOptions) => Promise<EdgeSynthesisResult>;
   getMcpClients: () => Promise<McpClientInfo[]>;
   installMcpClient: (clientId: string) => Promise<McpSetupResult>;
   uninstallMcpClient: (clientId: string) => Promise<McpSetupResult>;
@@ -93,6 +102,12 @@ const api: ElectronAPI = {
   onScanProgress: (callback) => subscribe('scanner:progress', callback),
   getEdgeVoices: () => ipcRenderer.invoke('tts:getEdgeVoices'),
   synthesizeEdge: (options) => ipcRenderer.invoke('tts:synthesizeEdge', options),
+  getOfflineVoiceStatus: () => ipcRenderer.invoke('kokoro:status'),
+  downloadOfflineVoice: () => ipcRenderer.invoke('kokoro:download'),
+  cancelOfflineVoiceDownload: () => ipcRenderer.invoke('kokoro:cancelDownload'),
+  removeOfflineVoice: () => ipcRenderer.invoke('kokoro:remove'),
+  onOfflineVoiceDownloadProgress: (callback) => subscribe('kokoro:download-progress', callback),
+  synthesizeOffline: (options) => ipcRenderer.invoke('kokoro:synthesize', options),
   getMcpClients: () => ipcRenderer.invoke('mcp:getClients'),
   installMcpClient: (clientId) => ipcRenderer.invoke('mcp:installClient', clientId),
   uninstallMcpClient: (clientId) => ipcRenderer.invoke('mcp:uninstallClient', clientId),
