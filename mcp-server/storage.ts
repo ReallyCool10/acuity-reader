@@ -65,6 +65,12 @@ export async function loadLibraryState(customPath?: string): Promise<LibraryStat
       );
     }
     return {
+      /*
+       * Keep every key the app wrote, including ones this server does not use
+       * (the catalogue of removed titles, reading history). Every tool saves
+       * the whole state back, so a key left out here is deleted from the file.
+       */
+      ...parsed,
       folders: Array.isArray(parsed.folders) ? parsed.folders : [],
       items: Array.isArray(parsed.items) ? parsed.items : [],
       progress: parsed.progress && typeof parsed.progress === 'object' ? parsed.progress : {},

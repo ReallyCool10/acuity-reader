@@ -101,7 +101,18 @@ Both tsconfigs must be checked. `tsconfig.json` covers `src/` only; `electron/` 
     `mergeExternalLibraryChanges` against the last saved state and saves again. Every save carries
     the renderer's `libraryGeneration`; saves from before a merge are dropped. Never write the
     library from a state that has not merged the latest outside edit.
-19. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
+19. **Reader data is central, and outlives the shelf.** Progress, bookmarks, collections, reading
+    history (`history`) and the catalogue of every title ever held (`catalog`) are all in the
+    library file, keyed by item ID. Removing a title or folder never deletes them: removal marks
+    the catalogue entry (`removedAt`) and rescans skip it (`applyScan` in `src/lib/libraryScan.ts`).
+    Any writer of the library file must keep keys it does not use: the MCP server's
+    `loadLibraryState` spreads the parsed file for that reason.
+20. **The online voice follows Edge's protocol exactly** (`electron/edgeTts.ts`): plain SSML with
+    one voice and one prosody element, no `<break>` or extra namespaces, long-form voice names,
+    length-prefixed binary frames. A 403 is retried once after correcting the clock from the
+    server's `Date` header. A failure falls back to the system voice and must be reported to the
+    reader (`onFallback`), never silently.
+21. **The built page has a Content Security Policy** (`CONTENT_SECURITY_POLICY` in
     `vite.config.ts`), the second line of defence behind the EPUB sanitiser: script runs only from
     the app's own files, so no inline handler or `javascript:` URL can run. Never add
     `'unsafe-inline'` or `'unsafe-eval'` to `script-src`. The dev server does not apply it (hot

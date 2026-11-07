@@ -10,12 +10,14 @@ import {
   Moon,
   Palette,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Sun,
   Trash2,
   X,
 } from 'lucide-react';
-import type { AppTheme, McpClientInfo } from '../types';
+import type { AppTheme, CatalogEntry, McpClientInfo } from '../types';
+import { isInsideFolder } from '../lib/catalog';
 
 export type SettingsTab = 'theme' | 'folders' | 'mcp';
 
@@ -29,6 +31,9 @@ interface SettingsModalProps {
   onAddFolder: () => void;
   onRemoveFolder: (folder: string) => void;
   onRescan: () => void;
+  /** Titles the user removed; their reading data is kept. */
+  removedTitles?: CatalogEntry[];
+  onRestoreTitle?: (itemId: string) => void;
   isScanning: boolean;
   totalItems: number;
   booksCount: number;
@@ -45,6 +50,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onAddFolder,
   onRemoveFolder,
   onRescan,
+  removedTitles = [],
+  onRestoreTitle,
   isScanning,
   totalItems,
   booksCount,
@@ -442,8 +449,48 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <p className="text-[10.5px] leading-relaxed text-[var(--text-tertiary)]">
                 Acuity reads these folders and their subfolders. Covers and metadata come from embedded
-                tags where present, or from a matching image beside the file.
+                tags where present, or from a matching image beside the file. Removing a folder or a title
+                keeps its progress, bookmarks and history: they come back when the title does.
               </p>
+
+              {removedTitles.length > 0 && (
+                <div className="space-y-2">
+                  <h3 className="text-[12.5px] font-semibold text-[var(--text-primary)]">Removed titles</h3>
+                  <div className="space-y-1.5">
+                    {removedTitles.map((entry) => {
+                      const folderPresent = folders.some((folder) => isInsideFolder(entry.lastPath, folder));
+                      return (
+                        <div
+                          key={entry.id}
+                          className="surface-raised flex items-center gap-2 rounded-[var(--radius-md)] px-3 py-2"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[11.5px] text-[var(--text-primary)]" title={entry.title}>
+                              {entry.title}
+                            </p>
+                            <p className="truncate text-[10.5px] text-[var(--text-tertiary)]" title={entry.lastPath}>
+                              {entry.author ? `${entry.author} · ` : ''}
+                              {folderPresent ? 'Removed' : 'Add its folder again to bring it back'}
+                            </p>
+                          </div>
+                          {onRestoreTitle && folderPresent && (
+                            <button
+                              type="button"
+                              onClick={() => onRestoreTitle(entry.id)}
+                              disabled={isScanning}
+                              className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--stroke-default)] px-2 py-1 text-[11px] text-[var(--text-secondary)] transition-colors duration-150 hover:bg-[var(--surface-raised-hover)] hover:text-[var(--text-primary)] disabled:opacity-40"
+                              aria-label={`Restore ${entry.title} to the library`}
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              Restore
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

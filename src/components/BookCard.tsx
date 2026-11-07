@@ -1,8 +1,9 @@
-import React from 'react';
-import { FolderPlus, Play } from 'lucide-react';
+import React, { useCallback, useRef, useState } from 'react';
+import { Check, FolderPlus, MoreHorizontal, Play } from 'lucide-react';
 import type { MediaItem, ProgressItem } from '../types';
 import { cleanTitleString } from '../lib/metadata';
 import { useCoverShape } from '../hooks/useCoverShape';
+import { useDismissable } from '../hooks/useDismissable';
 import { CoverArt } from './CoverArt';
 
 interface BookCardProps {
@@ -11,6 +12,9 @@ interface BookCardProps {
   isPlaying?: boolean;
   onOpen: (item: MediaItem) => void;
   onAddToCollection?: (item: MediaItem) => void;
+  onSetFinished?: (item: MediaItem, finished: boolean) => void;
+  /** Take the title off the shelf; its reading data is kept for when it returns. */
+  onRemove?: (item: MediaItem) => void;
 }
 
 /**
@@ -33,7 +37,15 @@ export const BookCard = React.memo(function BookCard({
   isPlaying,
   onOpen,
   onAddToCollection,
+  onSetFinished,
+  onRemove,
 }: BookCardProps) {
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const closeMenu = useCallback(() => setIsMenuOpen(false), []);
+  useDismissable(menuRef, isMenuOpen, closeMenu);
+  const isFinished = Boolean(progress?.finishedAt);
+  const hasMenu = Boolean(onSetFinished || onRemove);
   const { src, ready, aspect, onShown } = useCoverShape(item);
   const isAudio = item.mediaType === 'audio';
   const percent = progress?.percent ?? 0;
@@ -41,7 +53,7 @@ export const BookCard = React.memo(function BookCard({
 
   const label = `${displayTitle}${item.author ? `, by ${item.author}` : ''}. ${
     isAudio ? 'Audiobook' : 'Book'
-  }${percent > 0 ? `, ${Math.round(percent)} percent complete` : ''}.`;
+  }${isFinished ? ', finished' : percent > 0 ? `, ${Math.round(percent)} percent complete` : ''}.`;
 
   return (
     <div
@@ -101,7 +113,17 @@ export const BookCard = React.memo(function BookCard({
               </div>
             )}
 
-            {percent > 0 && (
+            {isFinished && (
+              <span
+                className="absolute bottom-2 left-2 z-[3] flex items-center gap-1 rounded-[4px] border border-white/15 bg-black/65 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white/90 backdrop-blur-md"
+                title={`Finished ${new Date(progress!.finishedAt!).toLocaleDateString()}`}
+              >
+                <Check className="h-2.5 w-2.5" />
+                Finished
+              </span>
+            )}
+
+            {percent > 0 && !isFinished && (
               <div className="absolute inset-x-0 bottom-0 z-[3] h-[3px] bg-black/55">
                 <div
                   className="h-full rounded-r-full transition-[width] duration-300 ease-[var(--ease-out)]"
@@ -128,18 +150,74 @@ export const BookCard = React.memo(function BookCard({
         </div>
       </button>
 
-      {onAddToCollection && (
+      {(onAddToCollection || hasMenu) && (
         <div className="book-slot book-slot--overlay">
           <div className="cover-frame">
-            <button
-              type="button"
-              onClick={() => onAddToCollection(item)}
-              className="absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white/80 opacity-0 backdrop-blur-md transition-opacity duration-150 hover:bg-black/90 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
-              title="Add to Collection..."
-              aria-label={`Add ${displayTitle} to collection`}
-            >
-              <FolderPlus className="h-3 w-3" />
-            </button>
+            {onAddToCollection && (
+              <button
+                type="button"
+                onClick={() => onAddToCollection(item)}
+                className="absolute left-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white/80 opacity-0 backdrop-blur-md transition-opacity duration-150 hover:bg-black/90 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100"
+                title="Add to Collection..."
+                aria-label={`Add ${displayTitle} to collection`}
+              >
+                <FolderPlus className="h-3 w-3" />
+              </button>
+            )}
+
+            {hasMenu && (
+              <div ref={menuRef} className={`absolute top-2 z-[4] ${onAddToCollection ? 'left-9' : 'left-2'}`}>
+                <button
+                  type="button"
+                  onClick={() => setIsMenuOpen((open) => !open)}
+                  className={`flex h-6 w-6 items-center justify-center rounded-full bg-black/65 text-white/80 backdrop-blur-md transition-opacity duration-150 hover:bg-black/90 hover:text-white group-hover:opacity-100 group-focus-within:opacity-100 ${
+                    isMenuOpen ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  title="More actions"
+                  aria-label={`More actions for ${displayTitle}`}
+                  aria-haspopup="menu"
+                  aria-expanded={isMenuOpen}
+                >
+                  <MoreHorizontal className="h-3 w-3" />
+                </button>
+                {isMenuOpen && (
+                  <div
+                    role="menu"
+                    aria-label={`${displayTitle} actions`}
+                    className="menu left-0 top-7 w-48"
+                    style={{ '--menu-origin': 'top left' } as React.CSSProperties}
+                  >
+                    {onSetFinished && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          closeMenu();
+                          onSetFinished(item, !isFinished);
+                        }}
+                        className="menu-item"
+                      >
+                        {isFinished ? 'Mark as not finished' : 'Mark as finished'}
+                      </button>
+                    )}
+                    {onRemove && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          closeMenu();
+                          onRemove(item);
+                        }}
+                        className="menu-item"
+                        title="Progress and bookmarks are kept. Restore it from Settings, Library folders."
+                      >
+                        Remove from library
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

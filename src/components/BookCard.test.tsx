@@ -154,4 +154,39 @@ describe('BookCard', () => {
     act(() => open.click());
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it('offers to mark a title finished, or remove it, from a menu beside the open button', () => {
+    const onSetFinished = vi.fn();
+    const onRemove = vi.fn();
+    const item = makeItem();
+    act(() => root.render(<BookCard item={item} onOpen={vi.fn()} onSetFinished={onSetFinished} onRemove={onRemove} />));
+
+    const more = container.querySelector('button[aria-label^="More actions"]') as HTMLButtonElement;
+    // Not nested in the open button: a button may not contain another.
+    expect(more.closest('.book-open')).toBeNull();
+    act(() => more.click());
+    expect(more.getAttribute('aria-expanded')).toBe('true');
+
+    const items = () => [...container.querySelectorAll('[role="menuitem"]')] as HTMLButtonElement[];
+    expect(items().map((b) => b.textContent)).toEqual(['Mark as finished', 'Remove from library']);
+    act(() => items()[0].click());
+    expect(onSetFinished).toHaveBeenCalledWith(item, true);
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+
+    act(() => more.click());
+    act(() => items()[1].click());
+    expect(onRemove).toHaveBeenCalledWith(item);
+  });
+
+  it('shows a finished title as finished, and offers to undo it', () => {
+    const progress: ProgressItem = { id: 'item-1', percent: 100, lastPlayed: 1, finishedAt: 1 };
+    act(() =>
+      root.render(<BookCard item={makeItem()} progress={progress} onOpen={vi.fn()} onSetFinished={vi.fn()} />)
+    );
+    expect(container.textContent).toContain('Finished');
+    expect(container.querySelector('.book-open')?.getAttribute('aria-label')).toContain('finished');
+
+    act(() => (container.querySelector('button[aria-label^="More actions"]') as HTMLButtonElement).click());
+    expect(container.querySelector('[role="menuitem"]')?.textContent).toBe('Mark as not finished');
+  });
 });

@@ -65,6 +65,13 @@ export interface ProgressItem {
   chapterScroll?: number;
   percent: number;
   lastPlayed: number;
+  /** When the item was first opened (ms). Set once, kept through later sessions. */
+  startedAt?: number;
+  /**
+   * When the item was finished (ms): reached the end, or marked finished by
+   * the user. Cleared only by "Mark as not finished".
+   */
+  finishedAt?: number;
 }
 
 export interface Bookmark {
@@ -92,12 +99,52 @@ export interface Collection {
   updatedAt: number;
 }
 
+/**
+ * The register: one entry for every title the library has ever held, kept
+ * after the title is removed or its folder disconnected. Progress, bookmarks
+ * and collection membership live in the library file keyed by the same ID, so
+ * a title that comes back - the same file, or a copy elsewhere - finds them.
+ */
+export interface CatalogEntry {
+  id: string;
+  title: string;
+  author: string;
+  mediaType: MediaType;
+  format: string;
+  /** Where the file was last found. */
+  lastPath: string;
+  firstSeenAt: number;
+  /** Last time a scan found the file. */
+  lastSeenAt: number;
+  /**
+   * Set when the user removed the title from the library. Rescans leave it out
+   * until it is restored or its folder is added again.
+   */
+  removedAt?: number;
+  /** Earlier IDs of this title, so data filed under them can still be found. */
+  legacyIds?: string[];
+}
+
+/** A stretch of reading or listening: progress updates no more than a few minutes apart. */
+export interface ReadingSession {
+  itemId: string;
+  startedAt: number;
+  endedAt: number;
+  /** 0-100, like ProgressItem.percent. */
+  startPercent: number;
+  endPercent: number;
+}
+
 export interface LibraryState {
   folders: string[];
   items: MediaItem[];
   progress: Record<string, ProgressItem>;
   bookmarks: Record<string, Bookmark[]>;
   collections: Collection[];
+  /** Every title ever seen, by ID. Optional: files written before it existed have none. */
+  catalog?: Record<string, CatalogEntry>;
+  /** Reading sessions, oldest first, capped in length. */
+  history?: ReadingSession[];
 }
 
 export type SortKey = 'recent' | 'title' | 'author' | 'added';

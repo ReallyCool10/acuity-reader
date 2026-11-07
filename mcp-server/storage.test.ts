@@ -125,6 +125,23 @@ describe('mcp-server/storage', () => {
     const state = await loadLibraryState(path.join(os.tmpdir(), `acuity-missing-${Date.now()}.json`));
     expect(state.items).toEqual([]);
   });
+  it('keeps the catalogue, history and finished dates when it saves', async () => {
+    const withExtras = {
+      ...sampleState,
+      progress: { ...sampleState.progress, 'item-1': { ...sampleState.progress['item-1'], finishedAt: 123 } },
+      catalog: { gone: { id: 'gone', title: 'Gone', author: '', mediaType: 'book', format: 'epub', lastPath: '/x.epub', firstSeenAt: 1, lastSeenAt: 2, removedAt: 3 } },
+      history: [{ itemId: 'item-1', startedAt: 1, endedAt: 2, startPercent: 0, endPercent: 5 }],
+    } as LibraryState;
+    await saveLibraryState(withExtras, tempFilePath);
+
+    await updateReadingProgress('item-2', { percent: 50 }, tempFilePath);
+
+    const saved = JSON.parse(fs.readFileSync(tempFilePath, 'utf8'));
+    expect(saved.catalog.gone.removedAt).toBe(3);
+    expect(saved.history).toHaveLength(1);
+    expect(saved.progress['item-1'].finishedAt).toBe(123);
+  });
+
   it('loads library state correctly', async () => {
     const loaded = await loadLibraryState(tempFilePath);
     expect(loaded.items.length).toBe(3);

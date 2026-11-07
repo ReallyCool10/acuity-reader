@@ -31,6 +31,8 @@ can be read as description rather than aspiration.
 | Sleep timer | Working |
 | Companion pairing of text and audio editions | Working (matched on normalised title) |
 | Progress persistence, per title and per format | Working |
+| Finished status (automatic at the end, or by hand) and reading history | Working — history is recorded; there is no screen to browse it yet |
+| Removing titles, and getting their progress back when they return | Working (Settings, Library folders, Removed titles) |
 | MCP server for AI access to the library | Working (stdio transport) |
 | SQLite library index | **Not implemented** — state is a JSON file in `userData` |
 | macOS / mobile builds | **Not implemented** — Windows only today |
@@ -76,9 +78,29 @@ keeps the books its last scan found, with their progress and dates, until it is 
 
 ### Data
 
-Library state (folders, indexed items, progress, bookmarks) is a single JSON document in
-Electron's `userData` directory. Writes are debounced in the main process and committed
-atomically via write-to-temp-then-rename, so an interrupted write cannot truncate the library.
+Library state is a single JSON document, `acuity_library.json`, in Electron's `userData`
+directory. Writes are debounced in the main process and committed atomically via
+write-to-temp-then-rename, so an interrupted write cannot truncate the library.
+
+Reader data is kept in this one central file rather than beside each book. Writing into the
+books' folders would fail on read-only or network locations, scatter files through your library,
+and, if written into the book file itself, change the file's size, which is part of how a title is
+recognised. The file holds:
+
+| Key | What it holds |
+|:--|:--|
+| `items` | The titles on the shelf now |
+| `progress` | Position, percentage, when each title was started and finished |
+| `bookmarks`, `collections` | As named |
+| `history` | Reading and listening sessions (start, end, percentage before and after), the most recent 2,000 |
+| `catalog` | Every title the library has held, including removed ones and those in disconnected folders |
+
+All of these are keyed by a title's ID, which is derived from its title, author and file size, not
+its path, so moving or renaming a folder does not lose anything. Removing a title or a folder takes
+it off the shelf only: its progress, bookmarks and history stay in the file. When it comes back
+(restored from **Removed titles**, or its folder added again) it has them again. A copy with a
+different file size, a re-download for example, gets a different ID; if exactly one absent title
+in the catalogue has the same title, author and format, the copy takes over its data.
 
 View preferences (typeface, theme, volume, playback rate, sort order) live in `localStorage`;
 they are per-install chrome rather than user content.
@@ -112,8 +134,9 @@ fonts are bundled, and books are shown without anything they would load from the
 The online voices sound considerably better, which is why they are the default, but choosing them
 means the passage being narrated is transmitted to a Microsoft speech endpoint over a WebSocket.
 If you are reading anything you would not send to a third party, pick **System voice** in the
-reader's appearance menu. The choice is remembered, and narration falls back to the system voice
-automatically whenever the online service is unreachable.
+reader's appearance menu. The choice is remembered. If the online service cannot be reached or
+refuses a request, narration carries on with the system voice and the reader shows a notice
+saying why; the failure is also written to the app's error log.
 
 Two further caveats about the online engine:
 

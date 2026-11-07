@@ -18,6 +18,9 @@ import { findSiblingTracks } from './lib/playlist';
 import { warmThumbnails } from './lib/thumbnails';
 import { makePdfCovers } from './lib/pdfCovers';
 import { mergeExternalLibraryChanges } from './lib/libraryMerge';
+import { isInsideFolder, markRemoved, recordInCatalog, removedEntries, restoreRemoved } from './lib/catalog';
+import { applyScan } from './lib/libraryScan';
+import { nextProgress, recordSession, setFinished } from './lib/readingHistory';
 import {
   createCollection,
   updateCollection,
@@ -30,14 +33,21 @@ import {
 } from './lib/collections';
 import {
   carryForwardFirstSeenAt,
-  carryForwardLegacyIds,
   groupMultiFileAudiobooks,
   migrateLegacyItemIds,
   resolveAudiobookProgress,
 } from './lib/audiobookGrouping';
 import type { AppTheme, Bookmark, Collection, CollectionKind, LibraryState, MediaItem, MediaType, SortKey } from './types';
 
-const EMPTY_LIBRARY: LibraryState = { folders: [], items: [], progress: {}, bookmarks: {}, collections: [] };
+const EMPTY_LIBRARY: LibraryState = {
+  folders: [],
+  items: [],
+  progress: {},
+  bookmarks: {},
+  collections: [],
+  catalog: {},
+  history: [],
+};
 
 /** Titles at least this far in — but not finished — qualify for the Continue shelf. */
 const CONTINUE_MIN_PERCENT = 1;
@@ -145,7 +155,8 @@ export default function App() {
   }, [appTheme]);
 
   const scanFolders = useCallback(
-    async (foldersToScan: string[]) => {
+    /** `restoreFolder`: the user just added this folder, so titles removed from it come back. */
+    async (foldersToScan: string[], restoreFolder?: string) => {
       if (!window.electronAPI || foldersToScan.length === 0) return;
 
       setIsScanning(true);
@@ -160,19 +171,7 @@ export default function App() {
         const deduped = Array.from(new Map(scanned.map((item) => [item.filePath, item])).values());
         const grouped = groupMultiFileAudiobooks(deduped);
 
-        // Re-identified items must take their progress, bookmarks and
-        // collection memberships with them, and preserve original addition date.
-        updateLibrary(
-          (prev) => {
-            const withLegacy = carryForwardLegacyIds(prev.items, grouped);
-            const withDates = carryForwardFirstSeenAt(prev.items, withLegacy);
-            return migrateLegacyItemIds({
-              ...prev,
-              folders: foldersToScan,
-              items: withDates,
-            }).state;
-          }
-        );
+        updateLibrary((prev) => applyScan(prev, grouped, foldersToScan, restoreFolder));
       } catch (err) {
         console.error('Library scan failed:', err);
       } finally {
@@ -190,7 +189,13 @@ export default function App() {
 
       const grouped = groupMultiFileAudiobooks(saved.items);
       const withDates = carryForwardFirstSeenAt(saved.items, grouped);
-      const { state, changed } = migrateLegacyItemIds({ ...EMPTY_LIBRARY, ...saved, items: withDates });
+      const migrated = migrateLegacyItemIds({ ...EMPTY_LIBRARY, ...saved, items: withDates });
+      // Libraries saved before the catalogue existed: register what they hold now.
+      const needsCatalog = !saved.catalog;
+      const state = needsCatalog
+        ? { ...migrated.state, catalog: recordInCatalog(undefined, migrated.state.items) }
+        : migrated.state;
+      const changed = migrated.changed || needsCatalog;
       setLibrary(state);
 
       // Persist when IDs moved or dates migrated, so the store - which the MCP server reads
@@ -241,28 +246,21 @@ export default function App() {
 
   const handleAddFolder = useCallback(async () => {
     const selected = await window.electronAPI?.pickFolder();
-    if (selected && !library.folders.includes(selected)) {
-      await scanFolders([...library.folders, selected]);
-    }
+    if (!selected) return;
+    // Picking a folder already in the library rescans it and brings back titles removed from it.
+    const folders = library.folders.includes(selected) ? library.folders : [...library.folders, selected];
+    await scanFolders(folders, selected);
   }, [library.folders, scanFolders]);
 
   const handleRemoveFolder = useCallback(
     (folderToRemove: string) => {
-      /*
-       * Match on a path boundary, not a bare prefix: a plain startsWith would
-       * also strip "/Books Archive" when removing "/Books".
-       */
-      const prefix = folderToRemove.replace(/[/\\]+$/, '');
-      const isInside = (filePath: string) => {
-        if (filePath === prefix) return true;
-        const next = filePath.charAt(prefix.length);
-        return filePath.startsWith(prefix) && (next === '/' || next === '\\');
-      };
-
+      // Its titles leave the shelf but stay in the catalogue, and their
+      // progress and bookmarks stay in the library file for when they return.
       updateLibrary((prev) => ({
         ...prev,
         folders: prev.folders.filter((folder) => folder !== folderToRemove),
-        items: prev.items.filter((item) => !isInside(item.filePath)),
+        items: prev.items.filter((item) => !isInsideFolder(item.filePath, folderToRemove)),
+        catalog: recordInCatalog(prev.catalog, prev.items),
       }));
     },
     [updateLibrary]
@@ -272,38 +270,37 @@ export default function App() {
 
   const handleAudioProgress = useCallback(
     (itemId: string, currentTime: number, duration: number) => {
-      updateLibrary((prev) => ({
-        ...prev,
-        progress: {
-          ...prev.progress,
-          [itemId]: {
-            id: itemId,
-            currentTime,
-            duration,
-            percent: duration > 0 ? (currentTime / duration) * 100 : 0,
-            lastPlayed: Date.now(),
+      updateLibrary((prev) => {
+        const now = Date.now();
+        const previous = prev.progress[itemId];
+        const percent = duration > 0 ? (currentTime / duration) * 100 : 0;
+        return {
+          ...prev,
+          progress: {
+            ...prev.progress,
+            [itemId]: nextProgress(previous, { id: itemId, currentTime, duration, percent }, now),
           },
-        },
-      }));
+          history: recordSession(prev.history, itemId, percent, previous?.percent, now),
+        };
+      });
     },
     [updateLibrary]
   );
 
   const handleBookProgress = useCallback(
     (itemId: string, chapterIndex: number, percent: number, scroll: number) => {
-      updateLibrary((prev) => ({
-        ...prev,
-        progress: {
-          ...prev.progress,
-          [itemId]: {
-            id: itemId,
-            chapterIndex,
-            chapterScroll: scroll,
-            percent,
-            lastPlayed: Date.now(),
+      updateLibrary((prev) => {
+        const now = Date.now();
+        const previous = prev.progress[itemId];
+        return {
+          ...prev,
+          progress: {
+            ...prev.progress,
+            [itemId]: nextProgress(previous, { id: itemId, chapterIndex, chapterScroll: scroll, percent }, now),
           },
-        },
-      }));
+          history: recordSession(prev.history, itemId, percent, previous?.percent, now),
+        };
+      });
     },
     [updateLibrary]
   );
@@ -366,6 +363,44 @@ export default function App() {
     },
     [updateLibrary]
   );
+
+  /* ------------------------------------------------- library membership */
+
+  const handleSetFinished = useCallback(
+    (item: MediaItem, finished: boolean) => {
+      updateLibrary((prev) => {
+        const previous = resolveAudiobookProgress(item, prev.progress) ?? prev.progress[item.id];
+        return { ...prev, progress: { ...prev.progress, [item.id]: setFinished(previous, item.id, finished) } };
+      });
+    },
+    [updateLibrary]
+  );
+
+  /** Take a title off the shelf. Its progress, bookmarks and history are kept. */
+  const handleRemoveItem = useCallback(
+    (item: MediaItem) => {
+      if (activeAudioItem?.id === item.id) setActiveAudioItem(null);
+      if (activeBookItem?.id === item.id) setActiveBookItem(null);
+      updateLibrary((prev) => ({
+        ...prev,
+        items: prev.items.filter((it) => it.id !== item.id),
+        catalog: markRemoved(prev.catalog, [item]),
+      }));
+    },
+    [activeAudioItem?.id, activeBookItem?.id, updateLibrary]
+  );
+
+  /** Put a removed title back; the rescan finds its file if it is still there. */
+  const handleRestoreItem = useCallback(
+    (itemId: string) => {
+      const catalog = restoreRemoved(library.catalog, (entry) => entry.id === itemId);
+      updateLibrary((prev) => ({ ...prev, catalog }));
+      void scanFolders(library.folders);
+    },
+    [library.catalog, library.folders, scanFolders, updateLibrary]
+  );
+
+  const removedTitles = useMemo(() => removedEntries(library.catalog), [library.catalog]);
 
   /* ------------------------------------------------------------ opening */
 
@@ -473,6 +508,7 @@ export default function App() {
         const progress = resolveAudiobookProgress(item, library.progress) ?? library.progress[item.id];
         return (
           progress &&
+          !progress.finishedAt &&
           progress.percent > CONTINUE_MIN_PERCENT &&
           progress.percent < CONTINUE_MAX_PERCENT
         );
@@ -795,6 +831,8 @@ export default function App() {
                         isPlaying={activeAudioItem?.id === item.id}
                         onOpen={openItem}
                         onAddToCollection={setAddToCollectionItem}
+                        onSetFinished={handleSetFinished}
+                        onRemove={handleRemoveItem}
                       />
                     ))}
                   </div>
@@ -874,6 +912,8 @@ export default function App() {
         onAddFolder={() => void handleAddFolder()}
         onRemoveFolder={handleRemoveFolder}
         onRescan={() => void scanFolders(library.folders)}
+        removedTitles={removedTitles}
+        onRestoreTitle={handleRestoreItem}
         isScanning={isScanning}
         totalItems={counts.all}
         booksCount={counts.books}
